@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "LocalVoice - Private Read Aloud",
+  "version": "1.0.2",
+  "description": "Privacy-first, fully local webpage read-aloud Chrome extension powered by Piper TTS.",
+  "permissions": [
+    "tabs",
+    "sidePanel",
+    "offscreen",
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "http://localhost:8765/*",
+    "<all_urls>",
+    "file:///*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Open LocalVoice",
+    "default_popup": "sidepanel.html"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>", "file:///*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+backend/.venv/
+backend/cache/*.wav
+backend/server.pid
+.pytest_cache/
+
+# Node / Extension
+extension/node_modules/
+extension/dist/
+extension/.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
