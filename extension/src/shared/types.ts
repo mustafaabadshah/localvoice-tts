@@ -8,10 +8,24 @@ export interface TextBlock {
   tagName?: string;
 }
 
+export interface ExtractionDiagnostics {
+  pageTitle: string;
+  pageUrl: string;
+  readyState: string;
+  strategyUsed: string;
+  totalBlocks: number;
+  totalCharacters: number;
+  totalWords: number;
+  excludedCount: number;
+  durationMs: number;
+  previewBlocks: string[];
+}
+
 export interface ExtractionResult {
   pageTitle: string;
   pageUrl: string;
   blocks: TextBlock[];
+  diagnostics?: ExtractionDiagnostics;
 }
 
 export type ReadingState =
@@ -25,8 +39,25 @@ export type ReadingState =
   | 'COMPLETED'
   | 'ERROR';
 
+export type TTSEngineType = 'piper' | 'kokoro';
+
+export interface EngineInfo {
+  id: TTSEngineType;
+  name: string;
+  installed: boolean;
+  ready: boolean;
+  current_loaded_voice: string | null;
+  device: string;
+  runtime: string;
+  sample_rate?: number;
+  model_size_mb?: number;
+  description?: string;
+  is_active: boolean;
+}
+
 export interface VoiceMetadata {
   voice_id: string;
+  engine: TTSEngineType;
   language_code: string;
   language_name: string;
   speaker_name: string;
@@ -39,9 +70,13 @@ export interface VoiceMetadata {
 
 export interface BackendHealth {
   status: string;
+  active_engine: TTSEngineType;
   piper_runtime: string;
+  kokoro_runtime: string;
   cpu_execution: boolean;
   installed_voices_count: number;
+  piper_installed_voices: number;
+  kokoro_installed_voices: number;
   current_loaded_voice: string | null;
   version: string;
 }
@@ -66,10 +101,49 @@ export interface BackendMetrics {
 
 export interface LocalVoiceSettings {
   backendUrl: string;
-  selectedVoiceId: string;
+  selectedEngine: TTSEngineType;
+  selectedPiperVoiceId: string;
+  selectedKokoroVoiceId: string;
   playbackSpeed: number;
   autoScroll: boolean;
   highlightEnabled: boolean;
+}
+
+export interface EngineComparisonResult {
+  session_id: string;
+  text: string;
+  word_count: number;
+  character_count: number;
+  speed: number;
+  timestamp: number;
+  piper: {
+    engine: string;
+    voice_id: string;
+    audio_id?: string;
+    audio_url?: string;
+    synthesis_time_seconds?: number;
+    audio_duration_seconds?: number;
+    real_time_factor?: number;
+    peak_memory_mb?: number;
+    memory_delta_mb?: number;
+    cache_hit: boolean;
+    status: string;
+    error?: string;
+  };
+  kokoro: {
+    engine: string;
+    voice_id: string;
+    audio_id?: string;
+    audio_url?: string;
+    synthesis_time_seconds?: number;
+    audio_duration_seconds?: number;
+    real_time_factor?: number;
+    peak_memory_mb?: number;
+    memory_delta_mb?: number;
+    cache_hit: boolean;
+    status: string;
+    error?: string;
+  };
 }
 
 export type ExtensionMessage =

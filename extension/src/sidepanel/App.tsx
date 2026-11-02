@@ -6,6 +6,7 @@ import { Controls } from './components/Controls';
 import { VoiceSelector } from './components/VoiceSelector';
 import { SettingsModal } from './components/SettingsModal';
 import { DiagnosticsModal } from './components/DiagnosticsModal';
+import { ComparisonModal } from './components/ComparisonModal';
 
 import {
   ReadingState,
@@ -13,7 +14,9 @@ import {
   VoiceMetadata,
   BackendHealth,
   LocalVoiceSettings,
-  ExtractionResult
+  ExtractionResult,
+  ExtractionDiagnostics,
+  TTSEngineType
 } from '../shared/types';
 import { DEFAULT_BACKEND_URL, STORAGE_KEYS } from '../shared/constants';
 import { ReadingEngine } from './state/readingStateMachine';
@@ -23,7 +26,9 @@ export const App: React.FC = () => {
   // Settings State
   const [settings, setSettings] = useState<LocalVoiceSettings>({
     backendUrl: DEFAULT_BACKEND_URL,
-    selectedVoiceId: 'en_US-lessac-medium',
+    selectedEngine: 'piper',
+    selectedPiperVoiceId: 'en_US-lessac-medium',
+    selectedKokoroVoiceId: 'af_heart',
     playbackSpeed: 1.0,
     autoScroll: true,
     highlightEnabled: true
@@ -38,12 +43,15 @@ export const App: React.FC = () => {
 
   // Backend & Voice State
   const [health, setHealth] = useState<BackendHealth | null>(null);
-  const [voices, setVoices] = useState<VoiceMetadata[]>([]);
+  const [piperVoices, setPiperVoices] = useState<VoiceMetadata[]>([]);
+  const [kokoroVoices, setKokoroVoices] = useState<VoiceMetadata[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [diagnosticsData, setDiagnosticsData] = useState<ExtractionDiagnostics | null>(null);
 
   // Modals
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [comparisonOpen, setComparisonOpen] = useState(false);
 
   // Engine Ref
   const engineRef = useRef<ReadingEngine | null>(null);
@@ -51,7 +59,9 @@ export const App: React.FC = () => {
   // 1. Initialize Settings and Engine on Mount
   useEffect(() => {
     browserAdapter.getStorage<LocalVoiceSettings>(STORAGE_KEYS.SETTINGS).then((saved) => {
-      if (saved) setSettings(saved);
+      if (saved) {
+        setSettings((prev) => ({ ...prev, ...saved }));
+      }
     });
 
     const engine = new ReadingEngine(settings, {
@@ -65,7 +75,7 @@ export const App: React.FC = () => {
     engineRef.current = engine;
 
     checkBackendHealth();
-    fetchVoices();
+    fetchAllVoices();
 
     const interval = setInterval(checkBackendHealth, 5000);
     return () => clearInterval(interval);
@@ -93,18 +103,41 @@ export const App: React.FC = () => {
     }
   };
 
-  const fetchVoices = async () => {
+  const fetchAllVoices = async () => {
     try {
-      const res = await fetch(`${settings.backendUrl}/api/v1/voices`);
-      if (res.ok) {
-        const data = await res.json();
-        setVoices(data.voices || []);
-        if (data.voices?.length > 0 && !settings.selectedVoiceId) {
-          setSettings((s) => ({ ...s, selectedVoiceId: data.voices[0].voice_id }));
-        }
+      // Fetch Piper voices
+      const resPiper = await fetch(`${settings.backendUrl}/api/v1/voices?engine=piper`);
+      if (resPiper.ok) {
+        const dataPiper = await resPiper.json();
+        setPiperVoices(dataPiper.voices || []);
+      }
+
+      // Fetch Kokoro voices
+      const resKokoro = await fetch(`${settings.backendUrl}/api/v1/voices?engine=kokoro`);
+      if (resKokoro.ok) {
+        const dataKokoro = await resKokoro.json();
+        setKokoroVoices(dataKokoro.voices || []);
       }
     } catch (e) {
       console.warn('Could not fetch voices:', e);
+    }
+  };
+
+  const handleSelectEngine = async (newEngine: TTSEngineType) => {
+    if (newEngine === settings.selectedEngine) return;
+
+    try {
+      // Tell backend to switch engine
+      await fetch(`${settings.backendUrl}/api/v1/engines/select`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine: newEngine })
+      });
+
+      setSettings((s) => ({ ...s, selectedEngine: newEngine }));
+      checkBackendHealth();
+    } catch (e: any) {
+      setErrorMessage(`Could not switch to ${newEngine}: ${e.message}`);
     }
   };
 
@@ -126,9 +159,9 @@ export const App: React.FC = () => {
     }
 
     try {
-      const result: any = await browserAdapter.sendMessageToTab(tab.id, { type: 'EXTRACT_PAGE' });
-      if (result?.error) {
-        setErrorMessage(result.error);
+      const result: ExtractionResult = await browserAdapter.sendMessageToTab(tab.id, { type: 'EXTRACT_PAGE' });
+      if ((result as any)?.error) {
+        setErrorMessage((result as any).error);
         setReadingState('IDLE');
         return;
       }
@@ -136,6 +169,10 @@ export const App: React.FC = () => {
         setErrorMessage('No readable paragraphs or text blocks found on this page.');
         setReadingState('IDLE');
         return;
+      }
+
+      if (result.diagnostics) {
+        setDiagnosticsData(result.diagnostics);
       }
 
       setPageTitle(result.pageTitle || 'Webpage');
@@ -166,9 +203,9 @@ export const App: React.FC = () => {
     }
 
     try {
-      const result: any = await browserAdapter.sendMessageToTab(tab.id, { type: 'EXTRACT_SELECTION' });
-      if (result?.error) {
-        setErrorMessage(result.error);
+      const result: ExtractionResult = await browserAdapter.sendMessageToTab(tab.id, { type: 'EXTRACT_SELECTION' });
+      if ((result as any)?.error) {
+        setErrorMessage((result as any).error);
         setReadingState('IDLE');
         return;
       }
@@ -176,6 +213,10 @@ export const App: React.FC = () => {
         setErrorMessage('No text currently selected. Highlight some text on the webpage first.');
         setReadingState('IDLE');
         return;
+      }
+
+      if (result.diagnostics) {
+        setDiagnosticsData(result.diagnostics);
       }
 
       setPageTitle(`${result.pageTitle || 'Webpage'} (Selected Text)`);
@@ -215,8 +256,12 @@ export const App: React.FC = () => {
     setSettings((s) => ({ ...s, playbackSpeed: newSpeed }));
   };
 
-  const handleVoiceSelect = (voiceId: string) => {
-    setSettings((s) => ({ ...s, selectedVoiceId: voiceId }));
+  const handleSelectVoice = (voiceId: string) => {
+    if (settings.selectedEngine === 'kokoro') {
+      setSettings((s) => ({ ...s, selectedKokoroVoiceId: voiceId }));
+    } else {
+      setSettings((s) => ({ ...s, selectedPiperVoiceId: voiceId }));
+    }
   };
 
   const handleTestVoice = async (voiceId: string) => {
@@ -224,16 +269,21 @@ export const App: React.FC = () => {
       const res = await fetch(`${settings.backendUrl}/api/v1/voices/test`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ voice_id: voiceId })
+        body: JSON.stringify({
+          voice_id: voiceId,
+          engine: settings.selectedEngine
+        })
       });
+
       if (!res.ok) throw new Error('Voice test generation failed');
+
       const blob = await res.blob();
       const audioUrl = URL.createObjectURL(blob);
       const audio = new Audio(audioUrl);
       audio.playbackRate = settings.playbackSpeed;
       await audio.play();
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Could not test voice');
+    } catch (e: any) {
+      setErrorMessage(e.message || 'Could not test voice');
     }
   };
 
@@ -241,23 +291,46 @@ export const App: React.FC = () => {
     await fetch(`${settings.backendUrl}/api/v1/cache/clear`, { method: 'POST' });
   };
 
+  const activeVoices = settings.selectedEngine === 'kokoro' ? kokoroVoices : piperVoices;
+  const activeSelectedVoiceId = settings.selectedEngine === 'kokoro' ? settings.selectedKokoroVoiceId : settings.selectedPiperVoiceId;
+
   return (
     <div className="panel-container">
+      {/* Header with Dual Engine Toggle */}
       <Header
         health={health}
+        activeEngine={settings.selectedEngine}
+        onSelectEngine={handleSelectEngine}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenDiagnostics={() => setDiagnosticsOpen(true)}
+        onOpenComparison={() => setComparisonOpen(true)}
+        disabled={readingState === 'PLAYING' || readingState === 'SYNTHESIZING'}
       />
 
+      {/* Error Banner */}
       {errorMessage && (
-        <div style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--danger)', padding: '8px 12px', borderRadius: 'var(--radius-sm)', color: 'var(--danger)', fontSize: '11px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div style={{
+          backgroundColor: 'var(--bg-secondary)',
+          border: '1px solid var(--danger)',
+          padding: '6px 10px',
+          borderRadius: 'var(--radius-sm)',
+          color: 'var(--danger)',
+          fontSize: '10.5px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
           <span>{errorMessage}</span>
-          <button style={{ color: 'var(--text-secondary)', fontWeight: 600 }} onClick={() => setErrorMessage(null)}>✕</button>
+          <button style={{ color: 'var(--text-secondary)', fontWeight: 600, marginLeft: '6px' }} onClick={() => setErrorMessage(null)}>
+            ✕
+          </button>
         </div>
       )}
 
+      {/* Page Info */}
       <PageInfo pageTitle={pageTitle} blocks={blocks} />
 
+      {/* Current Paragraph & Progress */}
       <PlaybackInfo
         state={readingState}
         currentIndex={currentIndex}
@@ -265,6 +338,7 @@ export const App: React.FC = () => {
         currentBlock={currentBlock}
       />
 
+      {/* Action Buttons & Playback Controls */}
       <Controls
         state={readingState}
         hasBlocks={blocks.length > 0}
@@ -278,25 +352,41 @@ export const App: React.FC = () => {
         onSpeedChange={handleSpeedChange}
       />
 
+      {/* Engine-Specific Voice Selector */}
       <VoiceSelector
-        voices={voices}
-        selectedVoiceId={settings.selectedVoiceId}
-        onSelectVoice={handleVoiceSelect}
+        engine={settings.selectedEngine}
+        voices={activeVoices}
+        selectedVoiceId={activeSelectedVoiceId}
+        onSelectVoice={handleSelectVoice}
         onTestVoice={handleTestVoice}
+        disabled={readingState === 'PLAYING' || readingState === 'SYNTHESIZING'}
       />
 
+      {/* Modals */}
       <SettingsModal
         settings={settings}
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        onSave={(s) => setSettings(s)}
+        onSave={(newSettings) => setSettings(newSettings)}
         onClearCache={handleClearCache}
       />
 
       <DiagnosticsModal
         isOpen={diagnosticsOpen}
         backendUrl={settings.backendUrl}
+        diagnostics={diagnosticsData}
         onClose={() => setDiagnosticsOpen(false)}
+      />
+
+      <ComparisonModal
+        isOpen={comparisonOpen}
+        onClose={() => setComparisonOpen(false)}
+        backendUrl={settings.backendUrl}
+        defaultText={currentBlock?.text || ''}
+        piperVoices={piperVoices}
+        kokoroVoices={kokoroVoices}
+        selectedPiperVoiceId={settings.selectedPiperVoiceId}
+        selectedKokoroVoiceId={settings.selectedKokoroVoiceId}
       />
     </div>
   );

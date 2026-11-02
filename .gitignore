@@ -5,7 +5,11 @@ __pycache__/
 *.so
 .venv/
 backend/.venv/
-backend/cache/*.wav
+backend/cache/
+backend/voices/piper/*.onnx
+backend/voices/piper/*.onnx.json
+backend/voices/kokoro/*.onnx
+backend/voices/kokoro/*.bin
 backend/server.pid
 .pytest_cache/
 

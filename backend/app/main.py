@@ -6,26 +6,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.utils.logging import logger
 from app.utils.security import is_allowed_origin
-from app.services.piper_engine import piper_engine
+from app.services.engine_manager import engine_manager
 
 from app.api.health import router as health_router
+from app.api.engines import router as engines_router
 from app.api.voices import router as voices_router
 from app.api.synthesis import router as synthesis_router
+from app.api.compare import router as compare_router
 from app.api.settings import router as settings_router
 from app.api.metrics import router as metrics_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Initializing LocalVoice Piper TTS Backend...")
-    piper_engine.initialize()
+    logger.info(f"Initializing LocalVoice V2 Backend (Active Engine: {engine_manager.active_engine_id})...")
+    engine_manager.get_active_engine().initialize()
     yield
-    logger.info("Shutting down LocalVoice Backend, releasing loaded models...")
-    piper_engine.unload()
+    logger.info("Shutting down LocalVoice Backend, releasing loaded models from memory...")
+    for eng in engine_manager._engines.values():
+        eng.unload()
 
 app = FastAPI(
     title=settings.app_name,
     version=settings.version,
-    description="Privacy-first, CPU-optimized local webpage read-aloud TTS backend powered by Piper.",
+    description="Privacy-first, CPU-optimized local webpage read-aloud TTS backend with Dual Engines (Piper & Kokoro).",
     lifespan=lifespan
 )
 
@@ -48,13 +51,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Cached", "X-Latency-Seconds", "Content-Length"]
+    expose_headers=["X-Engine", "X-Cached", "X-Latency-Seconds", "Content-Length"]
 )
 
 # Include Routers with /api/v1 prefix
 app.include_router(health_router, prefix="/api/v1")
+app.include_router(engines_router, prefix="/api/v1")
 app.include_router(voices_router, prefix="/api/v1")
 app.include_router(synthesis_router, prefix="/api/v1")
+app.include_router(compare_router, prefix="/api/v1")
 app.include_router(settings_router, prefix="/api/v1")
 app.include_router(metrics_router, prefix="/api/v1")
 
@@ -64,6 +69,7 @@ def root():
         "service": settings.app_name,
         "version": settings.version,
         "status": "online",
+        "active_engine": engine_manager.active_engine_id,
         "health": "/api/v1/health",
         "docs": "/docs"
     }

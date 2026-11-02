@@ -1,63 +1,69 @@
-# LocalVoice 🎙️
+# LocalVoice V2 🎙️
 
-> **A fully local, privacy-first webpage read-aloud system powered by Piper TTS.**  
+> **A fully local, privacy-first webpage read-aloud system powered by Dual TTS Engines (Piper + Kokoro).**  
 > Zero cloud APIs. Zero subscriptions. Zero tracking. 100% CPU-optimized.
 
-LocalVoice reads entire webpages naturally, exactly as written, paragraph by paragraph, with visible in-page highlighting and automatic smooth scrolling.
+LocalVoice reads entire webpages naturally, exactly as written, paragraph by paragraph, with visible in-page highlighting, automatic scrolling, live DOM diagnostics, and instant side-by-side voice benchmarking.
 
 ---
 
-## 🌟 Key Features
+## 🌟 What's New in LocalVoice V2
 
-* **100% Local Speech Synthesis**: Uses **Piper TTS** with ONNX Runtime CPU SIMD execution.
-* **Chrome Manifest V3 Side Panel**: Modern React + TypeScript extension interface accessible right inside your browser window.
-* **Paragraph-by-Paragraph Highlighting**: Highlights the exact paragraph currently spoken with a subtle amber border and scrolls smoothly.
-* **Selection Reading**: Select any sentence or block on a webpage and read just the selection.
-* **Bounded Audio Cache**: Reuses identical generated paragraphs instantly (250 MB LRU disk cache).
-* **Speed Multipliers**: Granular speed adjustment (0.75x, 0.90x, 1.00x, 1.10x, 1.25x, 1.50x, 1.75x, 2.00x).
-* **Dynamic Voice Discovery**: Scans local voice directory for any installed Piper voice model without hardcoded lists.
-* **Decoupled Architecture**: Prepared for cross-browser support (Edge and Firefox).
+* **Dual TTS Engine Architecture**: Seamlessly switch between **Piper TTS** (VITS architecture for high-speed, low-latency streaming) and **Kokoro TTS** (82M parameter StyleTTS2 architecture for studio-grade human naturalness).
+* **55 Local Voices**: 1 high-speed Piper voice (`en_US-lessac-medium`) + 54 diverse Kokoro voice styles (American, British, and international accents).
+* **Universal Webpage Extractor**: 4-tier extraction hierarchy that accurately parses **Google Gmail active email views**, HTML5 semantic articles, SPA leaf nodes, and selected text snippets.
+* **Live Extraction Diagnostics**: Inspect extracted DOM metadata (blocks, character/word counts, duration, and selector strategies) with a single click.
+* **Side-by-Side Comparison & Benchmark Mode**: Test both engines on identical passages sequentially, compare latency, duration, and RTF, and audition voices side-by-side with 5-star ratings.
+* **Strict Sequential Model Isolation**: Explicit `unload()` cycles and Python garbage collection guarantee that both heavy neural models never co-exist in RAM, maintaining a peak working set under 350 MB on 8 GB systems.
+* **Compact Extension Interface**: Pixel-perfect traditional popup layout (350 px width) with native responsive dark and light modes.
 
 ---
 
-## 💻 Hardware Prerequisites
+## 💻 Hardware Requirements & Performance
 
-LocalVoice is specifically engineered to run comfortably on standard, everyday hardware:
-* **Operating System**: Windows 10 / 11 (or Linux / macOS)
-* **CPU**: Dual-core Intel Core i3 (e.g. i3-7100U) or better
-* **RAM**: 8 GB RAM (runs in ~68 MB RAM footprint)
-* **GPU**: None required (pure CPU execution)
-* **Software**: Python 3.12+ and Node.js v18+
+Designed and verified on dual-core Intel Core i3 systems:
+
+* **Processor**: Intel Core i3-7100U (2 cores, 4 threads @ 2.40 GHz) or equivalent
+* **Memory**: 8 GB RAM (runs comfortably within a ~260–346 MB peak memory envelope)
+* **Graphics**: None required (100% CPU SIMD ONNX execution)
+* **Operating System**: Windows 10 / 11, Chrome MV3 (with Edge & Firefox compatibility)
+* **Storage**: Secondary volume supported (`E:\MM Office\Model infrince tts\LocalVoice`) with zero C: drive disk pollution.
+
+### Empirical Performance Summary (i3-7100U Dual-Core CPU)
+
+| Engine | Model Type | Parameters | Warm Latency | Warm RTF | Recommended Use |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Piper TTS** | VITS ONNX | ~15M | **~2.06 s** | **0.20x** | Daily web & email reading, long articles |
+| **Kokoro TTS** | StyleTTS2 INT8 | 82M | **~38.12 s** | **8.66x** | Short snippets, audiobooks, voice auditions |
+
+*For complete benchmarks, latency charts, and RAM logs, see [docs/performance_report.md](file:///E:/MM%20Office/LFM3-Studio/LocalVoice/docs/performance_report.md).*
 
 ---
 
 ## 🚀 Quick Start Guide
 
-### Step 1: One-Click Setup
-Open PowerShell and run the setup script:
-
+### Step 1: One-Click Environment Setup
+From PowerShell:
 ```powershell
 cd "E:\MM Office\Model infrince tts\LocalVoice"
 .\scripts\setup.ps1
 ```
-This script automatically:
-1. Creates a Python virtual environment at `backend\.venv`.
-2. Installs all required dependencies (`fastapi`, `piper-tts`, `onnxruntime`, etc.).
-3. Downloads the high-quality default English voice (`en_US-lessac-medium`).
-4. Installs Node dependencies and builds the Chrome extension into `extension\dist\`.
+To install Kokoro TTS INT8 and its 54 voice models:
+```powershell
+.\scripts\install_kokoro.ps1
+```
 
 ---
 
-### Step 2: Start the Backend Server
-
+### Step 2: Start the Backend Daemon
 ```powershell
 .\scripts\start.ps1
 ```
-* **Backend URL**: `http://127.0.0.1:8765`
-* **Health Check**: `http://127.0.0.1:8765/api/v1/health`
-* **Interactive Docs**: `http://127.0.0.1:8765/docs`
+* **Backend REST API**: `http://127.0.0.1:8765`
+* **Health & Diagnostics**: `http://127.0.0.1:8765/api/v1/health`
+* **Interactive OpenAPI Docs**: `http://127.0.0.1:8765/docs`
 
-To stop the server at any time:
+To stop the backend daemon:
 ```powershell
 .\scripts\stop.ps1
 ```
@@ -70,56 +76,44 @@ To stop the server at any time:
    ```text
    chrome://extensions
    ```
-2. Enable **Developer mode** in the top-right corner.
-3. Click **Load unpacked** in the top-left corner.
-4. Select the extension build directory:
+2. Enable **Developer mode** (toggle switch in the top-right corner).
+3. Click **Load unpacked** (top-left button).
+4. Select the built extension directory:
    ```text
    E:\MM Office\Model infrince tts\LocalVoice\extension\dist
    ```
 5. Pin the **LocalVoice** icon to your Chrome toolbar.
-6. Open any article or the included [test_page.html](file:///e:/MM%20Office/Model%20infrince%20tts/LocalVoice/test_page.html) and click the icon to open the Side Panel!
+6. Open any article, Gmail message, or the included `test_page.html`, and click the extension icon to begin listening!
 
 ---
 
-## 🗣️ Managing & Downloading Voices
+## 🛠️ Management & Benchmark Scripts
 
-LocalVoice dynamically scans `backend/voices/` for `.onnx` and `.onnx.json` files. 
-
-You can download additional official voices anytime using the helper script:
-
-```powershell
-# Download Amy (English US Medium)
-.\scripts\download_voice.ps1 -VoiceId "en_US-amy-medium"
-
-# Download Thorsten (German Medium)
-.\scripts\download_voice.ps1 -VoiceId "de_DE-thorsten-medium"
-
-# Download Davefx (Spanish Medium)
-.\scripts\download_voice.ps1 -VoiceId "es_ES-davefx-medium"
-```
-The new voice will immediately appear in the extension dropdown!
+| Script | Purpose |
+| :--- | :--- |
+| `.\scripts\setup.ps1` | Creates virtualenv, installs Piper, downloads Lessac voice, and builds extension. |
+| `.\scripts\install_kokoro.ps1` | Downloads Kokoro v1.0 INT8 model (114 MB) and 54-voice binary pack (28 MB). |
+| `.\scripts\benchmark_engines.ps1` | Runs sequential benchmarks comparing Piper vs Kokoro latency, RTF, and RAM. |
+| `.\scripts\diagnose_extraction.ps1` | Tests webpage extraction logic across test HTML files. |
+| `.\scripts\test_backend.ps1` | Runs all 15 automated pytest suites covering cache, engines, health, and synthesis. |
+| `.\scripts\build_extension.ps1` | Runs TypeScript compilation and Vite build with IIFE content-script wrapping. |
+| `.\scripts\download_voice.ps1` | Downloads additional Piper community voices by ID. |
 
 ---
 
-## 🧪 Running Automated Tests
+## 📚 Technical Documentation
 
-Run the complete backend test suite:
-
-```powershell
-.\backend\.venv\Scripts\pytest.exe .\backend\tests -v
-```
-
-All 9 unit tests verify:
-* API health & diagnostics
-* Voice discovery & path traversal security
-* Speech synthesis WAV byte validation
-* LRU bounded disk cache limits and eviction
+* [Engine Comparison & Benchmarks](file:///E:/MM%20Office/LFM3-Studio/LocalVoice/docs/engine_comparison.md) — Piper vs Kokoro architectures, parameters, RTF, RAM, and licensing.
+* [Universal Webpage Extraction](file:///E:/MM%20Office/LFM3-Studio/LocalVoice/docs/webpage_extraction.md) — Gmail extraction, semantic article parsing, SPA fallbacks, and diagnostics.
+* [Performance Report](file:///E:/MM%20Office/LFM3-Studio/LocalVoice/docs/performance_report.md) — Empirical i3-7100U CPU benchmarks and resource analysis.
+* [Architecture Specification](file:///E:/MM%20Office/LFM3-Studio/LocalVoice/docs/architecture.md) — End-to-end component topology, state machines, and protocols.
+* [Implementation Audit](file:///E:/MM%20Office/LFM3-Studio/LocalVoice/docs/implementation_audit.md) — Baseline audit of initial claims vs empirical measurements.
 
 ---
 
 ## 🔒 Security & Privacy Guarantee
 
-* **127.0.0.1 Binding**: The server refuses connections from external networks.
-* **Origin Checking**: Cross-Origin requests from arbitrary public websites are strictly blocked.
-* **No Content Logging**: Full webpage texts are never written to log files.
-* **Zero Telemetry**: No tracking, analytics, or external phone-home requests.
+* **127.0.0.1 Binding**: The server listens exclusively on loopback and rejects external network connections.
+* **Origin Validation**: Cross-origin requests from arbitrary internet domains are strictly blocked.
+* **Zero Cloud Telemetry**: Webpage text, URLs, and audio never leave your local machine.
+* **Content Script Sandboxing**: Wrapped in an isolated IIFE preventing global variable leakage and prototype pollution.

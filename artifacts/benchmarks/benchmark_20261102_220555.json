@@ -1,0 +1,36 @@
+﻿{
+    "session_id":  "87f3716e",
+    "text":  "Testing the LocalVoice dual engine benchmark on our local CPU.",
+    "word_count":  10,
+    "character_count":  62,
+    "speed":  1.0,
+    "timestamp":  1793639154.8224738,
+    "piper":  {
+                  "engine":  "piper",
+                  "voice_id":  "en_US-lessac-medium",
+                  "audio_id":  "compare_87f3716e_piper.wav",
+                  "audio_url":  "/api/v1/compare/audio/compare_87f3716e_piper.wav",
+                  "synthesis_time_seconds":  9.961,
+                  "audio_duration_seconds":  3.78,
+                  "real_time_factor":  2.632,
+                  "peak_memory_mb":  253.7,
+                  "memory_delta_mb":  157.0,
+                  "cache_hit":  false,
+                  "status":  "success",
+                  "error":  null
+              },
+    "kokoro":  {
+                   "engine":  "kokoro",
+                   "voice_id":  "af_heart",
+                   "audio_id":  "compare_87f3716e_kokoro.wav",
+                   "audio_url":  "/api/v1/compare/audio/compare_87f3716e_kokoro.wav",
+                   "synthesis_time_seconds":  58.479,
+                   "audio_duration_seconds":  4.4,
+                   "real_time_factor":  13.305,
+                   "peak_memory_mb":  346.2,
+                   "memory_delta_mb":  247.0,
+                   "cache_hit":  false,
+                   "status":  "success",
+                   "error":  null
+               }
+}

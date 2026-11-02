@@ -1,18 +1,25 @@
 import React, { useState, useEffect } from 'react';
-import { X, RefreshCw, Cpu, Database, CheckCircle, AlertTriangle } from 'lucide-react';
-import { BackendHealth, BackendMetrics } from '../../shared/types';
+import { X, RefreshCw, Cpu, Database, AlertTriangle, Copy, Check, FileText } from 'lucide-react';
+import { BackendHealth, BackendMetrics, ExtractionDiagnostics } from '../../shared/types';
 
 interface DiagnosticsModalProps {
   isOpen: boolean;
   backendUrl: string;
+  diagnostics: ExtractionDiagnostics | null;
   onClose: () => void;
 }
 
-export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({ isOpen, backendUrl, onClose }) => {
+export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
+  isOpen,
+  backendUrl,
+  diagnostics,
+  onClose,
+}) => {
   const [health, setHealth] = useState<BackendHealth | null>(null);
   const [metrics, setMetrics] = useState<BackendMetrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const fetchDiagnostics = async () => {
     setLoading(true);
@@ -38,76 +45,115 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({ isOpen, back
     }
   }, [isOpen]);
 
+  const handleCopyDiagnostics = () => {
+    const report = {
+      timestamp: new Date().toISOString(),
+      backend_health: health,
+      backend_metrics: metrics,
+      extraction_diagnostics: diagnostics
+    };
+    navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   if (!isOpen) return null;
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Cpu size={16} />
-            <h2 style={{ fontSize: '15px', fontWeight: 600 }}>System Diagnostics</h2>
+      <div className="modal-content" style={{ maxHeight: '90vh', overflowY: 'auto', width: '92%', maxWidth: '370px', padding: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <Cpu size={15} style={{ color: 'var(--primary)' }} />
+            <h2 style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>Diagnostics & DOM</h2>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+            <button className="icon-btn" onClick={handleCopyDiagnostics} title="Copy Diagnostic JSON to Clipboard">
+              {copied ? <Check size={13} style={{ color: 'var(--success)' }} /> : <Copy size={13} />}
+            </button>
             <button className="icon-btn" onClick={fetchDiagnostics} disabled={loading} title="Refresh">
-              <RefreshCw size={14} className={loading ? 'spin' : ''} />
+              <RefreshCw size={13} className={loading ? 'spin' : ''} />
             </button>
             <button className="icon-btn" onClick={onClose}>
-              <X size={18} />
+              <X size={15} />
             </button>
           </div>
         </div>
 
-        {error ? (
-          <div style={{ padding: '12px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--danger)', borderRadius: 'var(--radius-sm)', display: 'flex', gap: '8px', alignItems: 'center', color: 'var(--danger)', fontSize: '12px' }}>
-            <AlertTriangle size={18} />
+        {error && (
+          <div style={{ padding: '8px', backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--danger)', borderRadius: 'var(--radius-sm)', display: 'flex', gap: '6px', alignItems: 'center', color: 'var(--danger)', fontSize: '11px', marginBottom: '8px' }}>
+            <AlertTriangle size={14} />
             <span>{error}</span>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {/* Runtime card */}
-            <div className="card" style={{ padding: '10px' }}>
-              <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>RUNTIME STATUS</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '11px' }}>
-                <div>Status: <strong>{health?.status || 'Unknown'}</strong></div>
-                <div>Engine: <strong>Piper TTS</strong></div>
-                <div>Execution: <strong>CPU Only</strong></div>
-                <div>Version: <strong>v{health?.version || '1.0.0'}</strong></div>
-                <div style={{ gridColumn: 'span 2' }}>
-                  Loaded Voice: <strong>{health?.current_loaded_voice || 'None'}</strong>
-                </div>
-              </div>
-            </div>
-
-            {/* Performance metrics */}
-            <div className="card" style={{ padding: '10px' }}>
-              <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>PERFORMANCE & REQUESTS</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '11px' }}>
-                <div>Total Requests: <strong>{metrics?.total_requests || 0}</strong></div>
-                <div>Successful: <strong style={{ color: 'var(--success)' }}>{metrics?.successful_requests || 0}</strong></div>
-                <div>Failed: <strong style={{ color: 'var(--danger)' }}>{metrics?.failed_requests || 0}</strong></div>
-                <div>Avg Latency: <strong>{metrics?.average_latency_seconds ? `${metrics.average_latency_seconds}s` : '0.0s'}</strong></div>
-              </div>
-            </div>
-
-            {/* Disk Cache */}
-            <div className="card" style={{ padding: '10px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
-                <Database size={12} />
-                <span>BOUNDED AUDIO CACHE</span>
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', fontSize: '11px' }}>
-                <div>Stored Audio: <strong>{metrics?.cache_stats?.total_mb || 0} MB</strong></div>
-                <div>Limit: <strong>{metrics?.cache_stats?.max_mb || 250} MB</strong></div>
-                <div>Cached Files: <strong>{metrics?.cache_stats?.file_count || 0}</strong></div>
-                <div>Hit Rate: <strong>{metrics?.cache_stats?.hit_rate_pct || 0}%</strong></div>
-              </div>
-            </div>
           </div>
         )}
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '14px' }}>
-          <button className="btn-secondary" onClick={onClose}>Close</button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {/* Webpage Extraction Diagnostics */}
+          <div className="card" style={{ padding: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>
+              <FileText size={11} />
+              <span>LIVE PAGE EXTRACTION</span>
+            </div>
+            {diagnostics ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '10px' }}>
+                <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  Title: <strong>{diagnostics.pageTitle || 'Untitled'}</strong>
+                </div>
+                <div>Strategy: <strong>{diagnostics.strategyUsed}</strong></div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px', marginTop: '2px' }}>
+                  <div>Blocks: <strong>{diagnostics.totalBlocks}</strong></div>
+                  <div>Words: <strong>{diagnostics.totalWords}</strong></div>
+                  <div>Chars: <strong>{diagnostics.totalCharacters}</strong></div>
+                  <div>Duration: <strong>{diagnostics.durationMs} ms</strong></div>
+                </div>
+                {diagnostics.previewBlocks.length > 0 && (
+                  <div style={{ marginTop: '4px', backgroundColor: 'var(--bg-secondary)', padding: '4px 6px', borderRadius: 'var(--radius-sm)', maxHeight: '45px', overflowY: 'auto', fontSize: '9.5px', color: 'var(--text-secondary)', lineHeight: 1.3 }}>
+                    <em>Preview:</em> {diagnostics.previewBlocks[0]}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                No page extracted yet. Click "Read Page" or "Read Selection" to capture live extraction metadata.
+              </div>
+            )}
+          </div>
+
+          {/* Dual Engine Runtime Status */}
+          <div className="card" style={{ padding: '8px' }}>
+            <div style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>
+              DUAL TTS RUNTIME STATUS
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '10px' }}>
+              <div>Status: <strong>{health?.status || 'Unknown'}</strong></div>
+              <div>Active: <strong style={{ color: health?.active_engine === 'kokoro' ? 'var(--accent)' : 'var(--primary)' }}>{health?.active_engine?.toUpperCase() || 'PIPER'}</strong></div>
+              <div>Piper: <strong>{health?.piper_runtime || 'Available'} ({health?.piper_installed_voices || 1})</strong></div>
+              <div>Kokoro: <strong>{health?.kokoro_runtime || 'Available'} ({health?.kokoro_installed_voices || 54})</strong></div>
+              <div style={{ gridColumn: 'span 2' }}>
+                Loaded Model: <strong>{health?.current_loaded_voice || 'None (Lazy load)'}</strong>
+              </div>
+            </div>
+          </div>
+
+          {/* Performance & Audio Cache */}
+          <div className="card" style={{ padding: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>
+              <Database size={11} />
+              <span>PERFORMANCE & CACHE</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '10px' }}>
+              <div>Requests: <strong>{metrics?.total_requests || 0}</strong></div>
+              <div>Avg Latency: <strong>{metrics?.average_latency_seconds ? `${metrics.average_latency_seconds}s` : '0.0s'}</strong></div>
+              <div>Cached: <strong>{metrics?.cache_stats?.total_mb || 0} MB / {metrics?.cache_stats?.max_mb || 250} MB</strong></div>
+              <div>Hit Rate: <strong>{metrics?.cache_stats?.hit_rate_pct || 0}%</strong></div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+          <button className="btn-secondary" onClick={onClose} style={{ fontSize: '10.5px', padding: '3px 8px' }}>
+            Close
+          </button>
         </div>
       </div>
     </div>

@@ -37,7 +37,20 @@ export class ReadingEngine {
 
   public updateSettings(newSettings: LocalVoiceSettings): void {
     const speedChanged = this.settings.playbackSpeed !== newSettings.playbackSpeed;
+    const engineChanged = this.settings.selectedEngine !== newSettings.selectedEngine;
+    
     this.settings = newSettings;
+
+    if (engineChanged && (this.state === 'PLAYING' || this.state === 'SYNTHESIZING' || this.state === 'PAUSED')) {
+      // Stop old engine audio immediately to avoid mixing audio streams
+      if (this.abortController) {
+        this.abortController.abort();
+        this.abortController = null;
+      }
+      chrome.runtime.sendMessage({ type: 'STOP_AUDIO' }).catch(() => {});
+      this.setState('READY');
+    }
+
     if (speedChanged && (this.state === 'PLAYING' || this.state === 'PAUSED')) {
       chrome.runtime.sendMessage({
         type: 'SET_AUDIO_SPEED',
@@ -61,15 +74,17 @@ export class ReadingEngine {
   }
 
   public async pause(): Promise<void> {
-    if (this.state !== 'PLAYING') return;
-    await chrome.runtime.sendMessage({ type: 'PAUSE_AUDIO' });
-    this.setState('PAUSED');
+    if (this.state === 'PLAYING') {
+      await chrome.runtime.sendMessage({ type: 'PAUSE_AUDIO' });
+      this.setState('PAUSED');
+    }
   }
 
   public async resume(): Promise<void> {
-    if (this.state !== 'PAUSED') return;
-    await chrome.runtime.sendMessage({ type: 'RESUME_AUDIO' });
-    this.setState('PLAYING');
+    if (this.state === 'PAUSED') {
+      await chrome.runtime.sendMessage({ type: 'RESUME_AUDIO' });
+      this.setState('PLAYING');
+    }
   }
 
   public async stop(): Promise<void> {
@@ -130,9 +145,13 @@ export class ReadingEngine {
       }).catch(() => {});
     }
 
-    // 2. Synthesize audio from local Piper backend
+    // 2. Synthesize audio from local backend
     this.setState('SYNTHESIZING');
     this.abortController = new AbortController();
+
+    const targetVoiceId = this.settings.selectedEngine === 'kokoro'
+      ? this.settings.selectedKokoroVoiceId
+      : this.settings.selectedPiperVoiceId;
 
     try {
       // Ensure offscreen audio document is alive
@@ -143,7 +162,8 @@ export class ReadingEngine {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text: currentBlock.text,
-          voice_id: this.settings.selectedVoiceId || undefined,
+          engine: this.settings.selectedEngine,
+          voice_id: targetVoiceId || undefined,
           speed: this.settings.playbackSpeed
         }),
         signal: this.abortController.signal

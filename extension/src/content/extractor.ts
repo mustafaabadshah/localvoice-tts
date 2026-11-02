@@ -1,4 +1,4 @@
-import { ExtractionResult, TextBlock, BlockType } from '../shared/types';
+import { ExtractionResult, TextBlock, BlockType, ExtractionDiagnostics } from '../shared/types';
 
 // Map of block ID to live DOM element in the active page
 export const blockElementMap = new Map<string, HTMLElement>();
@@ -51,6 +51,7 @@ function cleanText(text: string): string {
 }
 
 export function extractArticleContent(): ExtractionResult {
+  const startTime = performance.now();
   blockElementMap.clear();
 
   const title = document.title || 'Untitled Webpage';
@@ -58,6 +59,8 @@ export function extractArticleContent(): ExtractionResult {
   const blocks: TextBlock[] = [];
   const seenTexts = new Set<string>();
   let orderIndex = 0;
+  let excludedCount = 0;
+  let strategyUsed = 'semantic_article_containers';
 
   const addBlock = (el: HTMLElement, type: BlockType, text: string): boolean => {
     const cleaned = cleanText(text);
@@ -90,6 +93,7 @@ export function extractArticleContent(): ExtractionResult {
   // 1. Gmail-specific adaptive extraction
   const isGmail = window.location.hostname.includes('mail.google.com');
   if (isGmail) {
+    strategyUsed = 'gmail_active_email';
     // Subject heading
     const subjectEl = document.querySelector('h2.hP, [role="main"] h2') as HTMLElement;
     if (subjectEl && isVisible(subjectEl)) {
@@ -103,9 +107,11 @@ export function extractArticleContent(): ExtractionResult {
 
     if (emailBodies.length > 0) {
       for (const bodyEl of emailBodies) {
-        if (!isVisible(bodyEl)) continue;
+        if (!isVisible(bodyEl)) {
+          excludedCount++;
+          continue;
+        }
 
-        // Try to get child paragraphs or div blocks inside the email
         const innerParas = Array.from(
           bodyEl.querySelectorAll('p, div[dir="ltr"], div:not(:has(div)), li')
         ) as HTMLElement[];
@@ -114,6 +120,8 @@ export function extractArticleContent(): ExtractionResult {
           for (const p of innerParas) {
             if (isVisible(p) && !shouldSkipElement(p)) {
               addBlock(p, 'paragraph', p.innerText);
+            } else {
+              excludedCount++;
             }
           }
         } else {
@@ -126,7 +134,24 @@ export function extractArticleContent(): ExtractionResult {
     }
 
     if (blocks.length > 0) {
-      return { pageTitle: title, pageUrl: url, blocks };
+      const durationMs = Math.round(performance.now() - startTime);
+      const totalChars = blocks.reduce((acc, b) => acc + b.text.length, 0);
+      const totalWords = blocks.reduce((acc, b) => acc + b.text.split(/\s+/).length, 0);
+
+      const diagnostics: ExtractionDiagnostics = {
+        pageTitle: title,
+        pageUrl: url,
+        readyState: document.readyState,
+        strategyUsed,
+        totalBlocks: blocks.length,
+        totalCharacters: totalChars,
+        totalWords,
+        excludedCount,
+        durationMs,
+        previewBlocks: blocks.slice(0, 3).map((b) => b.text)
+      };
+
+      return { pageTitle: title, pageUrl: url, blocks, diagnostics };
     }
   }
 
@@ -143,7 +168,10 @@ export function extractArticleContent(): ExtractionResult {
     ) as HTMLElement[];
 
     for (const el of candidates) {
-      if (!isVisible(el) || shouldSkipElement(el)) continue;
+      if (!isVisible(el) || shouldSkipElement(el)) {
+        excludedCount++;
+        continue;
+      }
 
       const text = cleanText(el.innerText || '');
       if (!text || text.length < 3) continue;
@@ -162,12 +190,16 @@ export function extractArticleContent(): ExtractionResult {
 
   // 3. Fallback for SPAs / Modern Web Apps without standard <p> tags
   if (blocks.filter((b) => b.type === 'paragraph').length < 2) {
+    strategyUsed = 'spa_leaf_nodes';
     const textContainers = Array.from(
       document.querySelectorAll('div, section, span[dir="ltr"]')
     ) as HTMLElement[];
 
     for (const el of textContainers) {
-      if (!isVisible(el) || shouldSkipElement(el)) continue;
+      if (!isVisible(el) || shouldSkipElement(el)) {
+        excludedCount++;
+        continue;
+      }
 
       // Only inspect leaf or near-leaf elements (no child block tags)
       const hasBlockChildren = el.querySelector('p, div, h1, h2, h3, h4, h5, h6, article, section') !== null;
@@ -180,14 +212,33 @@ export function extractArticleContent(): ExtractionResult {
     }
   }
 
+  const durationMs = Math.round(performance.now() - startTime);
+  const totalChars = blocks.reduce((acc, b) => acc + b.text.length, 0);
+  const totalWords = blocks.reduce((acc, b) => acc + b.text.split(/\s+/).length, 0);
+
+  const diagnostics: ExtractionDiagnostics = {
+    pageTitle: title,
+    pageUrl: url,
+    readyState: document.readyState,
+    strategyUsed,
+    totalBlocks: blocks.length,
+    totalCharacters: totalChars,
+    totalWords,
+    excludedCount,
+    durationMs,
+    previewBlocks: blocks.slice(0, 3).map((b) => b.text)
+  };
+
   return {
     pageTitle: title,
     pageUrl: url,
-    blocks
+    blocks,
+    diagnostics
   };
 }
 
 export function extractSelectedContent(): ExtractionResult {
+  const startTime = performance.now();
   blockElementMap.clear();
   const selection = window.getSelection();
   const title = document.title || 'Untitled Webpage';
@@ -221,9 +272,27 @@ export function extractSelectedContent(): ExtractionResult {
     });
   });
 
+  const durationMs = Math.round(performance.now() - startTime);
+  const totalChars = blocks.reduce((acc, b) => acc + b.text.length, 0);
+  const totalWords = blocks.reduce((acc, b) => acc + b.text.split(/\s+/).length, 0);
+
+  const diagnostics: ExtractionDiagnostics = {
+    pageTitle: title,
+    pageUrl: url,
+    readyState: document.readyState,
+    strategyUsed: 'user_selected_text',
+    totalBlocks: blocks.length,
+    totalCharacters: totalChars,
+    totalWords,
+    excludedCount: 0,
+    durationMs,
+    previewBlocks: blocks.slice(0, 3).map((b) => b.text)
+  };
+
   return {
     pageTitle: title,
     pageUrl: url,
-    blocks
+    blocks,
+    diagnostics
   };
 }

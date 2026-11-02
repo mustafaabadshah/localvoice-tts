@@ -7,12 +7,16 @@ from fastapi import HTTPException, status
 import piper
 
 from app.config import settings
+from app.services.base_engine import BaseTTSEngine
 from app.services.voice_manager import voice_manager, VoiceMetadata
 from app.services.audio_cache import audio_cache
 from app.services.text_validator import validate_and_normalize_text
 from app.utils.logging import logger
 
-class PiperEngine:
+class PiperEngine(BaseTTSEngine):
+    engine_id: str = "piper"
+    engine_name: str = "Piper TTS"
+
     def __init__(self):
         self._lock = threading.Lock()
         self.current_voice_id: str | None = None
@@ -23,6 +27,45 @@ class PiperEngine:
         self.successful_requests: int = 0
         self.failed_requests: int = 0
         self.total_latency_seconds: float = 0.0
+
+    def is_installed(self) -> bool:
+        """Checks if Piper is available and at least one voice model is present."""
+        try:
+            voices = voice_manager.list_voices()
+            return len(voices) > 0
+        except Exception:
+            return False
+
+    def list_voices(self) -> list[dict]:
+        """Returns all installed Piper voices as dictionary metadata."""
+        voices = voice_manager.list_voices()
+        return [
+            {
+                "voice_id": v.voice_id,
+                "engine": "piper",
+                "language_code": v.language_code,
+                "language_name": v.language_name,
+                "speaker_name": v.speaker_name,
+                "quality": v.quality,
+                "sample_rate": v.sample_rate,
+                "num_speakers": v.num_speakers,
+                "model_size_mb": v.model_size_mb,
+                "is_valid": v.is_valid
+            }
+            for v in voices
+        ]
+
+    def get_engine_info(self) -> dict:
+        return {
+            "id": self.engine_id,
+            "name": self.engine_name,
+            "installed": self.is_installed(),
+            "ready": self._loaded_voice is not None,
+            "current_loaded_voice": self.current_voice_id,
+            "device": "CPU",
+            "runtime": "onnxruntime",
+            "description": "Ultra-fast neural text-to-speech with minimal CPU latency."
+        }
 
     def initialize(self) -> bool:
         """Pre-warms or verifies the default voice if available."""
@@ -52,7 +95,7 @@ class PiperEngine:
         if not voice_meta:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Voice '{voice_id}' is not installed or invalid."
+                detail=f"Voice '{voice_id}' is not installed or invalid in Piper."
             )
 
         # Unload previous voice to strictly conserve RAM on 8 GB machine
@@ -118,7 +161,8 @@ class PiperEngine:
             text=clean_text,
             voice_id=target_voice_id,
             speed=effective_speed,
-            model_fingerprint=meta.model_fingerprint
+            model_fingerprint=meta.model_fingerprint,
+            engine="piper"
         )
         cached_wav = audio_cache.get(cache_key)
         if cached_wav:
@@ -134,7 +178,6 @@ class PiperEngine:
                 voice = self._load_voice(target_voice_id)
                 
                 # In Piper, length_scale is inversely proportional to speed:
-                # speed = 1.5 -> length_scale = 1.0 / 1.5 ~ 0.667
                 length_scale = 1.0 / effective_speed
                 syn_config = piper.SynthesisConfig(
                     speaker_id=speaker_id,

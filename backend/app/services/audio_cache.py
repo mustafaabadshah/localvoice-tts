@@ -16,8 +16,8 @@ class AudioCache:
         self.hits = 0
         self.misses = 0
 
-    def compute_key(self, text: str, voice_id: str, speed: float, model_fingerprint: str = "") -> str:
-        payload = f"{text}|{voice_id}|{speed:.2f}|{model_fingerprint}"
+    def compute_key(self, text: str, voice_id: str, speed: float, model_fingerprint: str = "", engine: str = "piper") -> str:
+        payload = f"{engine}|{text}|{voice_id}|{speed:.2f}|{model_fingerprint}"
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def get_path(self, key: str) -> Path:
