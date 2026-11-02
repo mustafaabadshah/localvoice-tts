@@ -22,8 +22,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Open LocalVoice",
-    "default_popup": "sidepanel.html"
+    "default_title": "Open LocalVoice"
   },
   "side_panel": {
     "default_path": "sidepanel.html"

@@ -17,6 +17,30 @@ async function ensureOffscreenDocument(): Promise<void> {
   }
 }
 
+// Enable opening side panel when user clicks the extension action icon in toolbar
+// @ts-ignore
+if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
+  // @ts-ignore
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((err) => {
+    console.warn('Failed to set openPanelOnActionClick:', err);
+  });
+}
+
+// Fallback listener for action click if setPanelBehavior is not supported
+// @ts-ignore
+if (chrome.action && chrome.action.onClicked) {
+  // @ts-ignore
+  chrome.action.onClicked.addListener(async (tab) => {
+    // @ts-ignore
+    if (tab?.id && chrome.sidePanel && chrome.sidePanel.open) {
+      // @ts-ignore
+      chrome.sidePanel.open({ tabId: tab.id }).catch((err) => {
+        console.warn('Failed to open side panel via action click:', err);
+      });
+    }
+  });
+}
+
 // Forward messages or handle requests
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'ENSURE_OFFSCREEN') {

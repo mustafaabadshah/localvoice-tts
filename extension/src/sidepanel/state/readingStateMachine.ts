@@ -1,4 +1,4 @@
-import { ReadingState, TextBlock, LocalVoiceSettings } from '../../shared/types';
+import { ReadingState, TextBlock, LocalVoiceSettings, TTSEngineType } from '../../shared/types';
 import { browserAdapter } from '../../adapters/browser_adapter';
 
 export interface ReadingEngineListener {
@@ -56,6 +56,20 @@ export class ReadingEngine {
         type: 'SET_AUDIO_SPEED',
         speed: newSettings.playbackSpeed
       }).catch(() => {});
+    }
+  }
+
+  public switchEngine(newEngine: TTSEngineType): void {
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+    chrome.runtime.sendMessage({ type: 'STOP_AUDIO' }).catch(() => {});
+    this.settings.selectedEngine = newEngine;
+    if (this.blocks.length > 0) {
+      this.setState('READY');
+    } else {
+      this.setState('IDLE');
     }
   }
 

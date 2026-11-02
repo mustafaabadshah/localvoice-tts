@@ -68,39 +68,37 @@ export const Header: React.FC<HeaderProps> = ({
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', backgroundColor: 'var(--bg-secondary)', padding: '2px', borderRadius: 'var(--radius-sm)' }}>
         <button
           onClick={() => onSelectEngine('piper')}
-          disabled={disabled}
           style={{
-            padding: '3px 8px',
-            fontSize: '10.5px',
-            fontWeight: activeEngine === 'piper' ? 600 : 500,
+            padding: '4px 8px',
+            fontSize: '11px',
+            fontWeight: activeEngine === 'piper' ? 700 : 500,
             borderRadius: '4px',
-            border: 'none',
+            border: activeEngine === 'piper' ? '1px solid var(--primary)' : '1px solid transparent',
             backgroundColor: activeEngine === 'piper' ? 'var(--card-bg)' : 'transparent',
             color: activeEngine === 'piper' ? 'var(--primary)' : 'var(--text-secondary)',
             boxShadow: activeEngine === 'piper' ? 'var(--shadow-sm)' : 'none',
             cursor: 'pointer',
             transition: 'all 0.15s ease'
           }}
-          title="Piper: Ultra-fast real-time speech (0.2x RTF)"
+          title="Piper: Ultra-fast real-time speech (0.2x RTF, Instant Playback)"
         >
-          ⚡ Piper TTS
+          ⚡ Piper TTS (Fast)
         </button>
         <button
           onClick={() => onSelectEngine('kokoro')}
-          disabled={disabled}
           style={{
-            padding: '3px 8px',
-            fontSize: '10.5px',
-            fontWeight: activeEngine === 'kokoro' ? 600 : 500,
+            padding: '4px 8px',
+            fontSize: '11px',
+            fontWeight: activeEngine === 'kokoro' ? 700 : 500,
             borderRadius: '4px',
-            border: 'none',
+            border: activeEngine === 'kokoro' ? '1px solid var(--accent)' : '1px solid transparent',
             backgroundColor: activeEngine === 'kokoro' ? 'var(--card-bg)' : 'transparent',
             color: activeEngine === 'kokoro' ? 'var(--accent)' : 'var(--text-secondary)',
             boxShadow: activeEngine === 'kokoro' ? 'var(--shadow-sm)' : 'none',
             cursor: 'pointer',
             transition: 'all 0.15s ease'
           }}
-          title="Kokoro: High-fidelity 82M neural model (54 voices)"
+          title="Kokoro: High-fidelity 82M neural model (54 voices, studio quality)"
         >
           ✨ Kokoro (82M)
         </button>

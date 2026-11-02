@@ -126,18 +126,22 @@ export const App: React.FC = () => {
   const handleSelectEngine = async (newEngine: TTSEngineType) => {
     if (newEngine === settings.selectedEngine) return;
 
+    // 1. Immediately abort any in-flight synthesis / audio on frontend
+    engineRef.current?.switchEngine(newEngine);
+
+    // 2. Immediately update state so UI switches instantly
+    setSettings((s) => ({ ...s, selectedEngine: newEngine }));
+
+    // 3. Notify backend asynchronously
     try {
-      // Tell backend to switch engine
       await fetch(`${settings.backendUrl}/api/v1/engines/select`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ engine: newEngine })
       });
-
-      setSettings((s) => ({ ...s, selectedEngine: newEngine }));
       checkBackendHealth();
     } catch (e: any) {
-      setErrorMessage(`Could not switch to ${newEngine}: ${e.message}`);
+      console.warn(`Backend engine select sync: ${e?.message}`);
     }
   };
 
@@ -235,8 +239,10 @@ export const App: React.FC = () => {
       await engineRef.current?.pause();
     } else if (readingState === 'PAUSED') {
       await engineRef.current?.resume();
-    } else if (readingState === 'READY' || readingState === 'COMPLETED') {
+    } else if (readingState === 'READY' || readingState === 'COMPLETED' || (readingState === 'IDLE' && blocks.length > 0)) {
       await engineRef.current?.startReading(currentIndex);
+    } else if (readingState === 'IDLE') {
+      await handleReadPage();
     }
   };
 
@@ -336,6 +342,8 @@ export const App: React.FC = () => {
         currentIndex={currentIndex}
         totalBlocks={blocks.length}
         currentBlock={currentBlock}
+        activeEngine={settings.selectedEngine}
+        onSwitchToPiper={() => handleSelectEngine('piper')}
       />
 
       {/* Action Buttons & Playback Controls */}

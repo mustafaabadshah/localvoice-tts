@@ -48,11 +48,12 @@ body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   line-height: 1.35;
-  width: 350px;
-  min-width: 340px;
-  max-width: 380px;
+  width: 100%;
+  min-width: 320px;
+  max-width: 480px;
   margin: 0 auto;
   font-size: 11px;
+  overflow-x: hidden;
 }
 
 button {

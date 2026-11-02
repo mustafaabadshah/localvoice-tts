@@ -138,10 +138,19 @@ class KokoroEngine(BaseTTSEngine):
                 detail="Kokoro TTS is not installed or model files are missing. Run scripts/install_kokoro.ps1."
             )
 
-        logger.info(f"Loading Kokoro ONNX model into CPU memory: {self.model_path.name}")
+        logger.info(f"Loading Kokoro ONNX model with tuned CPU session options: {self.model_path.name}")
         t0 = time.time()
+        import os
+        import onnxruntime as rt
         from kokoro_onnx import Kokoro
-        self._kokoro = Kokoro(str(self.model_path), str(self.voices_path))
+
+        opts = rt.SessionOptions()
+        opts.graph_optimization_level = rt.GraphOptimizationLevel.ORT_ENABLE_ALL
+        opts.intra_op_num_threads = min(4, os.cpu_count() or 4)
+        opts.execution_mode = rt.ExecutionMode.ORT_SEQUENTIAL
+
+        sess = rt.InferenceSession(str(self.model_path), sess_options=opts, providers=["CPUExecutionProvider"])
+        self._kokoro = Kokoro.from_session(sess, str(self.voices_path))
         logger.info(f"Kokoro model loaded in {time.time() - t0:.2f}s")
         return self._kokoro
 
@@ -208,13 +217,20 @@ class KokoroEngine(BaseTTSEngine):
         start_time = time.time()
         self.total_requests += 1
 
-        prefix = target_voice_id[:2]
-        lang_code = KOKORO_LANG_MAP.get(prefix, ("en_US", "English", "Female", "en-us"))[3]
-
         with self._lock:
             try:
                 kokoro_instance = self._get_kokoro()
+                valid_voices = kokoro_instance.get_voices()
+
+                # Fallback safely if voice_id is missing, invalid, or from another engine
+                if not target_voice_id or target_voice_id not in valid_voices:
+                    target_voice_id = settings.default_kokoro_voice_id
+                    if target_voice_id not in valid_voices and valid_voices:
+                        target_voice_id = valid_voices[0]
+
                 self.current_voice_id = target_voice_id
+                prefix = target_voice_id[:2]
+                lang_code = KOKORO_LANG_MAP.get(prefix, ("en_US", "English", "Female", "en-us"))[3]
 
                 samples, sample_rate = kokoro_instance.create(
                     clean_text,
