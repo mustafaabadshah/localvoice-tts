@@ -91,7 +91,7 @@ def test_engine_switching_and_isolation():
 
 def test_health_check_never_loads_kokoro_model():
     """
-    Regression: /health is polled every 5 s by the side panel. It used to instantiate a
+    Regression: /health is polled every 5 s by the popup UI. It used to instantiate a
     full Kokoro ONNX session just to count voices (~3-6 s of CPU per poll on this class
     of hardware), which starved real synthesis requests.
     """

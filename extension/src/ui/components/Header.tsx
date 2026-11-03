@@ -1,5 +1,5 @@
 import React from 'react';
-import { Volume2, Settings as SettingsIcon, Activity, PanelRight, GitCompare } from 'lucide-react';
+import { Volume2, Settings as SettingsIcon, Activity, GitCompare } from 'lucide-react';
 import { BackendHealth, TTSEngineType } from '../../shared/types';
 
 interface HeaderProps {
@@ -23,10 +23,6 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const isOnline = health?.status === 'healthy';
 
-  const handleOpenSidePanel = () => {
-    chrome.runtime.sendMessage({ type: 'OPEN_SIDE_PANEL' }).catch(() => {});
-  };
-
   return (
     <div className="header">
       <div className="spread">
@@ -49,10 +45,6 @@ export const Header: React.FC<HeaderProps> = ({
 
           <button className="icon-btn" onClick={onOpenComparison} title="Compare Piper & Kokoro Side-by-Side">
             <GitCompare size={13} />
-          </button>
-
-          <button className="icon-btn" onClick={handleOpenSidePanel} title="Dock to Side Panel">
-            <PanelRight size={13} />
           </button>
 
           <button className="icon-btn" onClick={onOpenDiagnostics} title="Extraction & System Diagnostics">

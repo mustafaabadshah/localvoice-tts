@@ -17,29 +17,61 @@ async function ensureOffscreenDocument(): Promise<void> {
   }
 }
 
-// Enable opening side panel when user clicks the extension action icon in toolbar
-// @ts-ignore
-if (chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
-  // @ts-ignore
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((err) => {
-    console.warn('Failed to set openPanelOnActionClick:', err);
-  });
+/**
+ * The UI opens in its own small window rather than in Chrome's side panel, which would shrink
+ * the page being read. It has to be a real window and not an action popup: the reading loop
+ * lives in the UI process, and an action popup closes the instant the user clicks back into the
+ * article - which would strand the session after the current paragraph.
+ */
+const UI_WINDOW_KEY = 'localvoice_ui_window_id';
+const UI_WIDTH = 400;
+const UI_HEIGHT = 680;
+
+async function readStoredWindowId(): Promise<number | null> {
+  try {
+    const stored = await chrome.storage.session.get(UI_WINDOW_KEY);
+    const id = stored?.[UI_WINDOW_KEY];
+    return typeof id === 'number' ? id : null;
+  } catch {
+    return null;
+  }
 }
 
-// Fallback listener for action click if setPanelBehavior is not supported
-// @ts-ignore
-if (chrome.action && chrome.action.onClicked) {
-  // @ts-ignore
-  chrome.action.onClicked.addListener(async (tab) => {
-    // @ts-ignore
-    if (tab?.id && chrome.sidePanel && chrome.sidePanel.open) {
-      // @ts-ignore
-      chrome.sidePanel.open({ tabId: tab.id }).catch((err) => {
-        console.warn('Failed to open side panel via action click:', err);
-      });
+/** Open the UI window, or surface the one already open instead of stacking duplicates. */
+async function openUiWindow(): Promise<void> {
+  const existingId = await readStoredWindowId();
+  if (existingId !== null) {
+    try {
+      await chrome.windows.update(existingId, { focused: true });
+      return;
+    } catch {
+      // Window closed while the service worker was asleep - fall through and open a new one.
     }
+  }
+
+  const created = await chrome.windows.create({
+    url: chrome.runtime.getURL('popup.html'),
+    type: 'popup',
+    width: UI_WIDTH,
+    height: UI_HEIGHT
   });
+
+  if (created?.id !== undefined) {
+    await chrome.storage.session.set({ [UI_WINDOW_KEY]: created.id }).catch(() => {});
+  }
 }
+
+// Toolbar icon opens (or surfaces) the UI window.
+chrome.action.onClicked.addListener(() => {
+  openUiWindow().catch((err) => console.warn('Could not open LocalVoice window:', err));
+});
+
+// Forgetting the id on close keeps the next icon click from focusing a dead window.
+chrome.windows.onRemoved.addListener((windowId) => {
+  readStoredWindowId()
+    .then((id) => (id === windowId ? chrome.storage.session.remove(UI_WINDOW_KEY) : undefined))
+    .catch(() => {});
+});
 
 // Forward messages or handle requests
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -48,18 +80,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   
-  if (message.type === 'OPEN_SIDE_PANEL') {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tab = tabs[0];
-      // @ts-ignore
-      if (tab?.id && chrome.sidePanel && chrome.sidePanel.open) {
-        // @ts-ignore
-        chrome.sidePanel.open({ tabId: tab.id }).catch((err) => {
-          console.warn('Could not open side panel:', err);
-        });
-      }
-    });
-    sendResponse({ ok: true });
+  if (message.type === 'OPEN_UI_WINDOW') {
+    openUiWindow()
+      .then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false }));
     return true;
   }
 

@@ -5,7 +5,6 @@
   "description": "Privacy-first, fully local webpage read-aloud Chrome extension powered by Piper TTS.",
   "permissions": [
     "tabs",
-    "sidePanel",
     "offscreen",
     "activeTab",
     "scripting",
@@ -23,9 +22,6 @@
   },
   "action": {
     "default_title": "Open LocalVoice"
-  },
-  "side_panel": {
-    "default_path": "sidepanel.html"
   },
   "content_scripts": [
     {

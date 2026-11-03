@@ -11,7 +11,7 @@ export interface IBrowserAdapter {
 export class ChromeBrowserAdapter implements IBrowserAdapter {
   async getActiveTab(): Promise<chrome.tabs.Tab | null> {
     try {
-      // 1. Check active tab in current window (where popup/sidepanel is opened)
+      // 1. Check active tab in current window (where the popup was opened)
       const currentTabs = await chrome.tabs.query({ active: true, currentWindow: true });
       for (const t of currentTabs) {
         if (t.id && (!t.url || (!t.url.startsWith('chrome-extension://') && !t.url.startsWith('devtools://')))) {

@@ -12,7 +12,7 @@ let currentAudioUrl: string | null = null;
  * by a new load request") whenever the source is replaced before playback starts - which happens
  * on every paragraph hand-off. Comparing the token captured when `play()` was called against the
  * current one tells an expected cancellation apart from a genuine failure, so only real errors
- * are reported to the side panel.
+ * are reported to the UI.
  */
 let loadToken = 0;
 
@@ -110,7 +110,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       break;
     }
 
-    // Playback-rate trim. The side panel no longer sends this: the speed multiplier is baked
+    // Playback-rate trim. The UI no longer sends this: the speed multiplier is baked
     // into the audio by the engine during synthesis, so applying it here as well played 1.25x
     // audio at 1.56x. Kept so a future "rate only" control has a working message.
     case 'SET_AUDIO_SPEED': {
