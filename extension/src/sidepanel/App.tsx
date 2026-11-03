@@ -19,6 +19,7 @@ import {
   TTSEngineType
 } from '../shared/types';
 import { DEFAULT_BACKEND_URL, STORAGE_KEYS } from '../shared/constants';
+import { describeBackendError } from '../shared/errors';
 import { ReadingEngine } from './state/readingStateMachine';
 import { browserAdapter } from '../adapters/browser_adapter';
 
@@ -43,6 +44,9 @@ export const App: React.FC = () => {
 
   // Backend & Voice State
   const [health, setHealth] = useState<BackendHealth | null>(null);
+  // null = not polled yet, false = last poll failed, true = backend answered.
+  // Kept separate from `health` so the offline hint never flashes during the first poll.
+  const [backendReachable, setBackendReachable] = useState<boolean | null>(null);
   const [piperVoices, setPiperVoices] = useState<VoiceMetadata[]>([]);
   const [kokoroVoices, setKokoroVoices] = useState<VoiceMetadata[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -95,11 +99,14 @@ export const App: React.FC = () => {
       if (res.ok) {
         const data = await res.json();
         setHealth(data);
+        setBackendReachable(true);
       } else {
         setHealth(null);
+        setBackendReachable(false);
       }
     } catch {
       setHealth(null);
+      setBackendReachable(false);
     }
   };
 
@@ -289,7 +296,7 @@ export const App: React.FC = () => {
       audio.playbackRate = settings.playbackSpeed;
       await audio.play();
     } catch (e: any) {
-      setErrorMessage(e.message || 'Could not test voice');
+      setErrorMessage(describeBackendError(e, settings.backendUrl));
     }
   };
 
@@ -312,6 +319,23 @@ export const App: React.FC = () => {
         onOpenComparison={() => setComparisonOpen(true)}
         disabled={readingState === 'PLAYING' || readingState === 'SYNTHESIZING'}
       />
+
+      {/* Backend offline hint - self-clears as soon as a health poll succeeds */}
+      {backendReachable === false && (
+        <div style={{
+          backgroundColor: 'var(--bg-secondary)',
+          border: '1px solid var(--accent)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '6px 10px',
+          color: 'var(--text-secondary)',
+          fontSize: '10.5px',
+          lineHeight: 1.4
+        }}>
+          Backend not reachable at <strong style={{ color: 'var(--text-primary)' }}>{settings.backendUrl}</strong>.
+          <br />
+          Start it with <strong style={{ color: 'var(--text-primary)' }}>.\scripts\start.ps1</strong> in the LocalVoice folder.
+        </div>
+      )}
 
       {/* Error Banner */}
       {errorMessage && (

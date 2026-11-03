@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Play, Pause, Loader2, GitCompare, ThumbsUp, Sparkles, Zap, Activity } from 'lucide-react';
 import { VoiceMetadata, EngineComparisonResult } from '../../shared/types';
+import { describeBackendError } from '../../shared/errors';
 
 interface ComparisonModalProps {
   isOpen: boolean;
@@ -73,7 +74,7 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
       const data: EngineComparisonResult = await resp.json();
       setComparison(data);
     } catch (err: any) {
-      setError(err?.message || 'Comparison failed');
+      setError(describeBackendError(err, backendUrl));
     } finally {
       setLoading(false);
     }

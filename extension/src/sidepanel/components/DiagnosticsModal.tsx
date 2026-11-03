@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, RefreshCw, Cpu, Database, AlertTriangle, Copy, Check, FileText } from 'lucide-react';
 import { BackendHealth, BackendMetrics, ExtractionDiagnostics } from '../../shared/types';
+import { describeBackendError } from '../../shared/errors';
 
 interface DiagnosticsModalProps {
   isOpen: boolean;
@@ -33,7 +34,7 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
       if (healthRes.ok) setHealth(await healthRes.json());
       if (metricsRes.ok) setMetrics(await metricsRes.json());
     } catch (e: any) {
-      setError(e.message || 'Could not connect to backend');
+      setError(describeBackendError(e, backendUrl));
     } finally {
       setLoading(false);
     }

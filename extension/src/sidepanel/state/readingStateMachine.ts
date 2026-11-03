@@ -1,4 +1,5 @@
 import { ReadingState, TextBlock, LocalVoiceSettings, TTSEngineType } from '../../shared/types';
+import { describeBackendError } from '../../shared/errors';
 import { browserAdapter } from '../../adapters/browser_adapter';
 
 export interface ReadingEngineListener {
@@ -312,7 +313,7 @@ export class ReadingEngine {
     } catch (err: any) {
       if (err.name === 'AbortError') return; // Deliberate cancellation
       this.setState('ERROR');
-      this.listener.onError(err.message || 'Speech generation failed');
+      this.listener.onError(describeBackendError(err, this.settings.backendUrl));
     }
   }
 
