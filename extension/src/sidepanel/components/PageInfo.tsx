@@ -1,5 +1,5 @@
 import React from 'react';
-import { FileText, Clock } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { TextBlock } from '../../shared/types';
 
 interface PageInfoProps {
@@ -8,29 +8,36 @@ interface PageInfoProps {
 }
 
 export const PageInfo: React.FC<PageInfoProps> = ({ pageTitle, blocks }) => {
-  const totalWords = blocks.reduce((acc, b) => acc + b.text.split(/\s+/).length, 0);
-  const estimatedMinutes = Math.max(1, Math.round(totalWords / 150));
+  const totalWords = blocks.reduce((acc, b) => acc + b.text.split(/\s+/).filter(Boolean).length, 0);
+  const minutes = Math.max(1, Math.round(totalWords / 150));
+  const hasContent = blocks.length > 0;
 
+  // No "Active Tab" label and no "N paragraphs extracted" sentence: the title plus
+  // two tabular numbers say the same thing in one row, and the row disappears
+  // entirely until a page has actually been read.
   return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-secondary)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-          <FileText size={12} />
-          <span style={{ textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>Active Tab</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-          <Clock size={10} />
-          <span>~{estimatedMinutes} min read</span>
-        </div>
+    <div className="spread" style={{ padding: '0 1px' }}>
+      <div className="row" style={{ gap: '5px' }}>
+        <FileText size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+        <span
+          title={pageTitle}
+          style={{
+            fontSize: '11.5px',
+            fontWeight: 600,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          {pageTitle || '—'}
+        </span>
       </div>
 
-      <div style={{ fontWeight: 600, fontSize: '11.5px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {pageTitle || 'No active webpage'}
-      </div>
-
-      <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-        {blocks.length} paragraphs extracted
-      </div>
+      {hasContent && (
+        <span className="meta" title={`${totalWords} words`}>
+          {blocks.length} para · {minutes} min
+        </span>
+      )}
     </div>
   );
 };

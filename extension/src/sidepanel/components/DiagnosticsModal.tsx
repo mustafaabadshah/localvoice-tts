@@ -66,7 +66,7 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
             <Cpu size={15} style={{ color: 'var(--primary)' }} />
-            <h2 style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>Diagnostics & DOM</h2>
+            <h2>Diagnostics</h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
             <button className="icon-btn" onClick={handleCopyDiagnostics} title="Copy Diagnostic JSON to Clipboard">
@@ -115,16 +115,14 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
               </div>
             ) : (
               <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                No page extracted yet. Click "Read Page" or "Read Selection" to capture live extraction metadata.
+                No extraction yet
               </div>
             )}
           </div>
 
           {/* Dual Engine Runtime Status */}
           <div className="card" style={{ padding: '8px' }}>
-            <div style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>
-              DUAL TTS RUNTIME STATUS
-            </div>
+            <div className="section-label" style={{ marginBottom: '5px' }}>Runtime</div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '10px' }}>
               <div>Status: <strong>{health?.status || 'Unknown'}</strong></div>
               <div>Active: <strong style={{ color: health?.active_engine === 'kokoro' ? 'var(--accent)' : 'var(--primary)' }}>{health?.active_engine?.toUpperCase() || 'PIPER'}</strong></div>
@@ -140,7 +138,7 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
           <div className="card" style={{ padding: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>
               <Database size={11} />
-              <span>PERFORMANCE & CACHE</span>
+              <span>Cache</span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', fontSize: '10px' }}>
               <div>Requests: <strong>{metrics?.total_requests || 0}</strong></div>

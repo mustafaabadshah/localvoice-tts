@@ -28,23 +28,24 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', paddingBottom: '6px', borderBottom: '1px solid var(--border-color)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <div style={{ backgroundColor: 'var(--primary)', color: '#fff', padding: '4px', borderRadius: '6px', display: 'flex' }}>
-            <Volume2 size={14} />
+    <div className="header">
+      <div className="spread">
+        <div className="row">
+          <div className="brand-mark">
+            <Volume2 size={13} />
           </div>
-          <div>
-            <h1 style={{ fontSize: '13px', fontWeight: 600, margin: 0, lineHeight: 1.2 }}>LocalVoice</h1>
-            <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>Dual TTS • 100% Local CPU</span>
-          </div>
+          <h1>LocalVoice</h1>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-          <div className="status-badge" title={isOnline ? 'Local backend connected' : 'Backend offline'}>
-            <div className={`status-dot ${isOnline ? 'online' : 'offline'}`} />
-            <span>{isOnline ? 'Ready' : 'Offline'}</span>
-          </div>
+        <div className="row" style={{ gap: '2px' }}>
+          {isOnline ? (
+            <div className="status-dot online" role="img" aria-label="Backend connected" title="Backend connected" />
+          ) : (
+            <div className="status-badge" title="Backend not reachable">
+              <div className="status-dot offline" />
+              <span>Offline</span>
+            </div>
+          )}
 
           <button className="icon-btn" onClick={onOpenComparison} title="Compare Piper & Kokoro Side-by-Side">
             <GitCompare size={13} />
@@ -64,43 +65,25 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Dual Engine Switcher Segmented Control */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px', backgroundColor: 'var(--bg-secondary)', padding: '2px', borderRadius: 'var(--radius-sm)' }}>
+      {/* Two engines, one choice. Names only: the cost of each is surfaced in context. */}
+      <div className="segmented" role="tablist" aria-label="Speech engine">
         <button
+          role="tab"
+          aria-selected={activeEngine === 'piper'}
+          data-active={activeEngine === 'piper'}
           onClick={() => onSelectEngine('piper')}
-          style={{
-            padding: '4px 8px',
-            fontSize: '11px',
-            fontWeight: activeEngine === 'piper' ? 700 : 500,
-            borderRadius: '4px',
-            border: activeEngine === 'piper' ? '1px solid var(--primary)' : '1px solid transparent',
-            backgroundColor: activeEngine === 'piper' ? 'var(--card-bg)' : 'transparent',
-            color: activeEngine === 'piper' ? 'var(--primary)' : 'var(--text-secondary)',
-            boxShadow: activeEngine === 'piper' ? 'var(--shadow-sm)' : 'none',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease'
-          }}
-          title="Piper: Ultra-fast real-time speech (0.2x RTF, Instant Playback)"
+          title="Piper - synthesises faster than playback on CPU"
         >
-          ⚡ Piper TTS (Fast)
+          Piper
         </button>
         <button
+          role="tab"
+          aria-selected={activeEngine === 'kokoro'}
+          data-active={activeEngine === 'kokoro'}
           onClick={() => onSelectEngine('kokoro')}
-          style={{
-            padding: '4px 8px',
-            fontSize: '11px',
-            fontWeight: activeEngine === 'kokoro' ? 700 : 500,
-            borderRadius: '4px',
-            border: activeEngine === 'kokoro' ? '1px solid var(--accent)' : '1px solid transparent',
-            backgroundColor: activeEngine === 'kokoro' ? 'var(--card-bg)' : 'transparent',
-            color: activeEngine === 'kokoro' ? 'var(--accent)' : 'var(--text-secondary)',
-            boxShadow: activeEngine === 'kokoro' ? 'var(--shadow-sm)' : 'none',
-            cursor: 'pointer',
-            transition: 'all 0.15s ease'
-          }}
-          title="Kokoro: High-fidelity 82M neural model (54 voices, studio quality)"
+          title="Kokoro - 82M model, more natural, slower than real time on CPU"
         >
-          ✨ Kokoro (82M)
+          Kokoro
         </button>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { X } from 'lucide-react';
 import { Header } from './components/Header';
 import { PageInfo } from './components/PageInfo';
 import { PlaybackInfo } from './components/PlaybackInfo';
@@ -21,7 +22,6 @@ import {
 import { DEFAULT_BACKEND_URL, STORAGE_KEYS } from '../shared/constants';
 import { describeBackendError } from '../shared/errors';
 import {
-  ENGINE_RTF,
   estimatePageSynthSeconds,
   formatDuration,
   isSlowerThanRealtime
@@ -83,6 +83,12 @@ export const App: React.FC = () => {
       onError: (err) => setErrorMessage(err)
     });
     engineRef.current = engine;
+
+    // Name the page before it has been read: the panel should say what it *would*
+    // read instead of showing a placeholder until the first extraction lands.
+    browserAdapter.getActiveTab().then((tab) => {
+      if (tab?.title) setPageTitle(tab.title);
+    }).catch(() => {});
 
     checkBackendHealth();
     fetchAllVoices();
@@ -249,7 +255,7 @@ export const App: React.FC = () => {
         setDiagnosticsData(result.diagnostics);
       }
 
-      setPageTitle(`${result.pageTitle || 'Webpage'} (Selected Text)`);
+      setPageTitle(result.pageTitle || 'Webpage');
       setBlocks(result.blocks);
       engineRef.current?.setContent(result.blocks, tab.id);
       await engineRef.current?.startReading(0);
@@ -351,81 +357,42 @@ export const App: React.FC = () => {
         disabled={readingState === 'PLAYING' || readingState === 'SYNTHESIZING'}
       />
 
-      {/* Backend offline hint - self-clears as soon as a health poll succeeds */}
+      {/* Offline is the one state that earns words: what is down, where, and the
+          single command that brings it back. */}
       {backendReachable === false && (
-        <div style={{
-          backgroundColor: 'var(--bg-secondary)',
-          border: '1px solid var(--accent)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '6px 10px',
-          color: 'var(--text-secondary)',
-          fontSize: '10.5px',
-          lineHeight: 1.4
-        }}>
-          Backend not reachable at <strong style={{ color: 'var(--text-primary)' }}>{settings.backendUrl}</strong>.
-          <br />
-          Start it with <strong style={{ color: 'var(--text-primary)' }}>.\scripts\start.ps1</strong> in the LocalVoice folder.
+        <div className="banner" data-tone="danger">
+          <span className="status-dot offline" />
+          <span style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--danger)' }}>Offline</span>
+          <span className="meta mono">{settings.backendUrl.replace(/^https?:\/\//, '')}</span>
+          <span className="meta mono" style={{ marginLeft: 'auto' }}>.\scripts\start.ps1</span>
         </div>
       )}
 
-      {/* Kokoro pace guard - Kokoro is ~8.7x slower than real time on a 2-core CPU, so a
-          full-page read spends far longer synthesising than listening. Say so up front
-          instead of stalling silently at every paragraph. */}
+      {/* Engine cost as one line of numbers with the escape hatch attached. Kokoro
+          needs this much CPU per second of audio on a small CPU; Piper does not. */}
       {showKokoroPaceWarning && (
-        <div style={{
-          backgroundColor: 'var(--bg-secondary)',
-          border: '1px solid var(--accent)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '6px 10px',
-          color: 'var(--text-secondary)',
-          fontSize: '10.5px',
-          lineHeight: 1.4,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '6px'
-        }}>
-          <span>
-            <strong style={{ color: 'var(--accent)' }}>Kokoro is slower than real time on this CPU.</strong>{' '}
-            It needs about <strong style={{ color: 'var(--text-primary)' }}>{formatDuration(kokoroPerParagraphSeconds)}</strong> of
-            CPU per paragraph ({ENGINE_RTF.kokoro.toFixed(1)}x slower than playback), so this {blocks.length}-paragraph
-            page costs roughly <strong style={{ color: 'var(--text-primary)' }}>{formatDuration(kokoroPageSeconds)}</strong> of
-            synthesis. Piper needs {formatDuration(piperPageSeconds)} for the same page and never pauses.
+        <div className="banner">
+          <span className="meta" style={{ fontWeight: 600, color: 'var(--accent)' }}>Kokoro</span>
+          <span className="meta">
+            {formatDuration(kokoroPerParagraphSeconds)}/para · {formatDuration(kokoroPageSeconds)} total
           </span>
           <button
+            className="btn-primary"
             onClick={handleReadWithPiper}
-            style={{
-              alignSelf: 'flex-start',
-              fontSize: '10px',
-              padding: '3px 8px',
-              borderRadius: '3px',
-              backgroundColor: 'var(--primary)',
-              color: '#fff',
-              fontWeight: 600,
-              cursor: 'pointer'
-            }}
-            title="Switch to Piper and continue from the current paragraph"
+            style={{ marginLeft: 'auto', padding: '2px 8px', fontSize: '10px' }}
+            title="Switch to Piper and continue from this paragraph"
           >
-            ⚡ Continue with Fast Piper
+            Piper {formatDuration(piperPageSeconds)}
           </button>
         </div>
       )}
 
-      {/* Error Banner */}
+      {/* Errors are the only prose the panel allows, because they carry a recovery action. */}
       {errorMessage && (
-        <div style={{
-          backgroundColor: 'var(--bg-secondary)',
-          border: '1px solid var(--danger)',
-          padding: '6px 10px',
-          borderRadius: 'var(--radius-sm)',
-          color: 'var(--danger)',
-          fontSize: '10.5px',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
-        }}>
-          <span>{errorMessage}</span>
-          <button style={{ color: 'var(--text-secondary)', fontWeight: 600, marginLeft: '6px' }} onClick={() => setErrorMessage(null)}>
-            ✕
+        <div className="banner" data-tone="danger">
+          <span style={{ color: 'var(--danger)', flex: 1, lineHeight: 1.4 }}>{errorMessage}</span>
+          <button className="icon-btn" onClick={() => setErrorMessage(null)} title="Dismiss" aria-label="Dismiss">
+            <X size={12} />
           </button>
         </div>
       )}
@@ -440,7 +407,6 @@ export const App: React.FC = () => {
         totalBlocks={blocks.length}
         currentBlock={currentBlock}
         activeEngine={settings.selectedEngine}
-        onSwitchToPiper={handleReadWithPiper}
       />
 
       {/* Action Buttons & Playback Controls */}
@@ -459,7 +425,6 @@ export const App: React.FC = () => {
 
       {/* Engine-Specific Voice Selector */}
       <VoiceSelector
-        engine={settings.selectedEngine}
         voices={activeVoices}
         selectedVoiceId={activeSelectedVoiceId}
         onSelectVoice={handleSelectVoice}

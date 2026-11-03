@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Trash2, ShieldCheck, Check } from 'lucide-react';
+import { X, Trash2, Check } from 'lucide-react';
 import { LocalVoiceSettings } from '../../shared/types';
 
 interface SettingsModalProps {
@@ -39,90 +39,69 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  // Settings contains settings. No sublabels explaining what a toggle does, no
+  // privacy essay: the header badge already states connectivity and the README
+  // states the privacy model once, for everyone.
   return (
     <div className="modal-overlay">
       <div className="modal-content">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-          <h2 style={{ fontSize: '15px', fontWeight: 600 }}>LocalVoice Settings</h2>
-          <button className="icon-btn" onClick={onClose}>
-            <X size={18} />
+        <div className="spread" style={{ marginBottom: '12px' }}>
+          <h2>Settings</h2>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">
+            <X size={16} />
           </button>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          {/* Backend URL */}
-          <div>
-            <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>
-              Backend Server URL
-            </label>
-            <input
-              type="text"
-              value={localSettings.backendUrl}
-              onChange={(e) => setLocalSettings({ ...localSettings, backendUrl: e.target.value })}
-              style={{
-                width: '100%',
-                padding: '6px 10px',
-                borderRadius: 'var(--radius-sm)',
-                border: '1px solid var(--border-color)',
-                backgroundColor: 'var(--bg-secondary)',
-                color: 'var(--text-primary)'
-              }}
-            />
-          </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          <input
+            className="field"
+            type="text"
+            value={localSettings.backendUrl}
+            onChange={(e) => setLocalSettings({ ...localSettings, backendUrl: e.target.value })}
+            aria-label="Backend URL"
+            title="Backend URL"
+            spellCheck={false}
+          />
 
-          {/* Auto Scroll */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 500 }}>Auto-Scroll</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Scroll webpage smoothly to active block</div>
-            </div>
-            <input
-              type="checkbox"
-              checked={localSettings.autoScroll}
-              onChange={(e) => setLocalSettings({ ...localSettings, autoScroll: e.target.checked })}
-              style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-            />
-          </div>
-
-          {/* Highlighting */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <div style={{ fontSize: '12px', fontWeight: 500 }}>DOM Highlighting</div>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Visually highlight paragraph being spoken</div>
-            </div>
-            <input
-              type="checkbox"
-              checked={localSettings.highlightEnabled}
-              onChange={(e) => setLocalSettings({ ...localSettings, highlightEnabled: e.target.checked })}
-              style={{ width: '16px', height: '16px', cursor: 'pointer' }}
-            />
-          </div>
-
-          {/* Cache Management */}
-          <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
-            <div style={{ fontSize: '12px', fontWeight: 600, marginBottom: '6px' }}>Audio Cache</div>
+          <div className="spread">
+            <span style={{ fontSize: '11.5px' }}>Auto-scroll</span>
             <button
-              className="btn-secondary"
-              onClick={handleClear}
-              disabled={clearing}
-              style={{ width: '100%', fontSize: '11px', gap: '6px' }}
-            >
-              {cacheClearedMsg ? <Check size={14} style={{ color: 'var(--success)' }} /> : <Trash2 size={14} />}
-              <span>{cacheClearedMsg ? 'Cache Cleared!' : 'Clear Disk Audio Cache'}</span>
-            </button>
+              className="switch"
+              role="switch"
+              aria-checked={localSettings.autoScroll}
+              aria-label="Auto-scroll"
+              data-on={localSettings.autoScroll}
+              onClick={() => setLocalSettings({ ...localSettings, autoScroll: !localSettings.autoScroll })}
+            />
           </div>
 
-          {/* Privacy Guarantee */}
-          <div style={{ backgroundColor: 'var(--bg-secondary)', padding: '10px', borderRadius: 'var(--radius-sm)', display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-            <ShieldCheck size={18} style={{ color: 'var(--success)', flexShrink: 0, marginTop: '2px' }} />
-            <div style={{ fontSize: '10px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-              <strong>100% Local & Private:</strong> Webpage text is never sent to the cloud, third-party APIs, or external servers. All speech is generated on your CPU by Piper.
-            </div>
+          <div className="spread">
+            <span style={{ fontSize: '11.5px' }}>Highlight</span>
+            <button
+              className="switch"
+              role="switch"
+              aria-checked={localSettings.highlightEnabled}
+              aria-label="Highlight the paragraph being read"
+              data-on={localSettings.highlightEnabled}
+              onClick={() => setLocalSettings({ ...localSettings, highlightEnabled: !localSettings.highlightEnabled })}
+            />
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
+          <div className="divider" />
+
+          <button
+            className="btn-secondary"
+            onClick={handleClear}
+            disabled={clearing}
+            style={{ width: '100%', gap: '5px' }}
+          >
+            {cacheClearedMsg ? <Check size={13} style={{ color: 'var(--success)' }} /> : <Trash2 size={13} />}
+            <span>{cacheClearedMsg ? 'Cache cleared' : 'Clear cache'}</span>
+          </button>
+
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn-secondary" onClick={onClose}>Cancel</button>
-            <button className="btn-primary" onClick={handleSave}>Save Settings</button>
+            <button className="btn-primary" onClick={handleSave}>Save</button>
           </div>
         </div>
       </div>

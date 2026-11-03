@@ -1,9 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Volume2, PlayCircle, Loader2 } from 'lucide-react';
-import { VoiceMetadata, TTSEngineType } from '../../shared/types';
+import { PlayCircle, Loader2 } from 'lucide-react';
+import { VoiceMetadata } from '../../shared/types';
 
 interface VoiceSelectorProps {
-  engine: TTSEngineType;
   voices: VoiceMetadata[];
   selectedVoiceId: string;
   onSelectVoice: (voiceId: string) => void;
@@ -12,7 +11,6 @@ interface VoiceSelectorProps {
 }
 
 export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
-  engine,
   voices,
   selectedVoiceId,
   onSelectVoice,
@@ -32,7 +30,8 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
   const activeVoice = voices.find((v) => v.voice_id === selectedVoiceId) || voices[0];
   const [selectedLang, setSelectedLang] = useState<string>(activeVoice?.language_code || 'en_US');
 
-  // When engine or voices change, sync language
+  // Sync the language picker with the active voice whenever the voice list changes
+  // (switching engines swaps the whole list, so `voices` is the only trigger needed).
   useEffect(() => {
     if (activeVoice) {
       setSelectedLang(activeVoice.language_code);
@@ -40,7 +39,7 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
       setSelectedLang(voices[0].language_code);
       onSelectVoice(voices[0].voice_id);
     }
-  }, [engine, voices]);
+  }, [voices]);
 
   const filteredVoices = useMemo(() => {
     return voices.filter((v) => v.language_code === selectedLang || v.language_code.startsWith(selectedLang.split('_')[0]));
@@ -56,79 +55,76 @@ export const VoiceSelector: React.FC<VoiceSelectorProps> = ({
     }
   };
 
+  // One row, no section header, no "N available" count. A dropdown only exists when
+  // there is a choice to make: with a single installed voice the name is a fact, so
+  // it renders as text instead of a dead one-option control.
+  const showLanguage = languages.length > 1;
+  const showVoicePicker = filteredVoices.length > 1;
+
   return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '5px', padding: '6px 8px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)' }}>
-          <Volume2 size={12} />
-          <span style={{ textTransform: 'uppercase' }}>
-            {engine === 'kokoro' ? 'Kokoro Voice (82M)' : 'Piper Voice'}
-          </span>
-          <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>({voices.length} available)</span>
-        </div>
-        <button
-          className="btn-secondary"
-          onClick={handleTest}
-          disabled={disabled || testing || !activeVoice}
-          style={{ padding: '2px 6px', fontSize: '10px', gap: '3px' }}
-          title={`Test preview for ${activeVoice?.speaker_name || 'voice'}`}
+    <div className="row" style={{ gap: '6px' }}>
+      {showLanguage && (
+        <select
+          className="select"
+          value={selectedLang}
+          disabled={disabled}
+          onChange={(e) => {
+            setSelectedLang(e.target.value);
+            const firstInLang = voices.find((v) => v.language_code === e.target.value);
+            if (firstInLang) onSelectVoice(firstInLang.voice_id);
+          }}
+          aria-label="Language"
+          title="Language"
+          style={{ flex: '0 0 44%' }}
         >
-          {testing ? <Loader2 size={10} className="spin" /> : <PlayCircle size={10} />}
-          <span>Test</span>
-        </button>
-      </div>
+          {languages.map((l) => (
+            <option key={l.code} value={l.code}>
+              {l.name}
+            </option>
+          ))}
+        </select>
+      )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-        <div>
-          <select
-            value={selectedLang}
-            disabled={disabled || languages.length === 0}
-            onChange={(e) => {
-              setSelectedLang(e.target.value);
-              const firstInLang = voices.find((v) => v.language_code === e.target.value);
-              if (firstInLang) onSelectVoice(firstInLang.voice_id);
-            }}
-            style={{
-              width: '100%',
-              backgroundColor: 'var(--bg-secondary)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '3px 4px',
-              fontSize: '10.5px'
-            }}
-          >
-            {languages.map((l) => (
-              <option key={l.code} value={l.code}>
-                {l.name}
-              </option>
-            ))}
-          </select>
-        </div>
+      {showVoicePicker ? (
+        <select
+          className="select"
+          value={activeVoice?.voice_id || ''}
+          disabled={disabled}
+          onChange={(e) => onSelectVoice(e.target.value)}
+          aria-label="Voice"
+          title="Voice"
+        >
+          {filteredVoices.map((v) => (
+            <option key={v.voice_id} value={v.voice_id}>
+              {v.speaker_name}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <span
+          title={activeVoice?.speaker_name}
+          style={{
+            flex: 1,
+            fontSize: '11px',
+            fontWeight: 500,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap'
+          }}
+        >
+          {activeVoice?.speaker_name || '—'}
+        </span>
+      )}
 
-        <div>
-          <select
-            value={activeVoice?.voice_id || ''}
-            disabled={disabled || filteredVoices.length === 0}
-            onChange={(e) => onSelectVoice(e.target.value)}
-            style={{
-              width: '100%',
-              backgroundColor: 'var(--bg-secondary)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '3px 4px',
-              fontSize: '10.5px'
-            }}
-          >
-            {filteredVoices.map((v) => (
-              <option key={v.voice_id} value={v.voice_id}>
-                {v.speaker_name}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
+      <button
+        className="icon-btn"
+        onClick={handleTest}
+        disabled={disabled || testing || !activeVoice}
+        title="Preview voice"
+        aria-label="Preview voice"
+      >
+        {testing ? <Loader2 size={13} className="spin" /> : <PlayCircle size={13} />}
+      </button>
     </div>
   );
 };

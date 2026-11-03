@@ -109,21 +109,15 @@ export const Controls: React.FC<ControlsProps> = ({
           </button>
         </div>
 
-        {/* Speed Selector */}
+        {/* Speed selector. The value already reads "1.25x", so it needs no label. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-          <span style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 500 }}>Speed:</span>
           <select
+            className="select"
             value={speed}
             onChange={(e) => onSpeedChange(parseFloat(e.target.value))}
-            style={{
-              backgroundColor: 'var(--bg-secondary)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '2px 4px',
-              fontWeight: 500,
-              fontSize: '10.5px'
-            }}
+            aria-label="Playback speed"
+            title="Playback speed"
+            style={{ width: 'auto' }}
           >
             {PLAYBACK_SPEEDS.map((s) => (
               <option key={s} value={s}>

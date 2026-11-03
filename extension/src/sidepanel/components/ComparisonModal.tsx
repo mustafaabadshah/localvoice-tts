@@ -110,7 +110,7 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
             <GitCompare size={15} style={{ color: 'var(--primary)' }} />
-            <h2 style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>Engine Benchmark</h2>
+            <h2>Benchmark</h2>
           </div>
           <button className="icon-btn" onClick={onClose}>
             <X size={15} />
@@ -125,13 +125,12 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
 
         {/* Input Text Area */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginBottom: '8px' }}>
-          <label style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)' }}>
-            EVALUATION TEXT:
-          </label>
           <textarea
             value={testText}
             onChange={(e) => setTestText(e.target.value)}
             rows={2}
+            placeholder="Text to speak"
+            aria-label="Text to speak"
             style={{
               width: '100%',
               fontSize: '10px',
@@ -149,8 +148,8 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
         {/* Voice Selection Controls */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '8px' }}>
           <div>
-            <label style={{ fontSize: '9.5px', fontWeight: 600, color: 'var(--primary)', display: 'block', marginBottom: '2px' }}>
-              ⚡ Piper Voice:
+            <label className="section-label" style={{ color: 'var(--primary)', display: 'block', marginBottom: '2px' }}>
+              Piper
             </label>
             <select
               value={piperVoice}
@@ -166,8 +165,8 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
           </div>
 
           <div>
-            <label style={{ fontSize: '9.5px', fontWeight: 600, color: 'var(--accent)', display: 'block', marginBottom: '2px' }}>
-              ✨ Kokoro Voice:
+            <label className="section-label" style={{ color: 'var(--accent)', display: 'block', marginBottom: '2px' }}>
+              Kokoro
             </label>
             <select
               value={kokoroVoice}
@@ -191,7 +190,7 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
           style={{ width: '100%', padding: '5px', fontSize: '11px', marginBottom: '10px', gap: '5px' }}
         >
           {loading ? <Loader2 size={12} className="spin" /> : <GitCompare size={12} />}
-          <span>{loading ? 'Evaluating Sequentially (CPU)...' : 'Run Side-by-Side Benchmark'}</span>
+          <span>{loading ? 'Running' : 'Run'}</span>
         </button>
 
         {/* Results Cards */}
@@ -201,7 +200,7 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
             <div className="card" style={{ padding: '8px', borderLeft: '3px solid var(--primary)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                 <span style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--primary)', display: 'flex', alignItems: 'center', gap: '3px' }}>
-                  <Zap size={11} /> Piper TTS
+                  <Zap size={11} /> Piper
                 </span>
                 <button
                   className="btn-secondary"
@@ -225,7 +224,7 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
             <div className="card" style={{ padding: '8px', borderLeft: '3px solid var(--accent)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                 <span style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '3px' }}>
-                  <Sparkles size={11} /> Kokoro (82M)
+                  <Sparkles size={11} /> Kokoro
                 </span>
                 {comparison.kokoro.status === 'success' ? (
                   <button
@@ -255,9 +254,7 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
 
             {/* Subjective Preference Rating */}
             <div className="card" style={{ padding: '6px 8px' }}>
-              <div style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '4px' }}>
-                WHICH VOICE DID YOU PREFER?
-              </div>
+              <div className="section-label" style={{ marginBottom: '4px' }}>Preference</div>
               <div style={{ display: 'flex', gap: '4px' }}>
                 <button
                   className="btn-secondary"
@@ -283,7 +280,7 @@ export const ComparisonModal: React.FC<ComparisonModalProps> = ({
               </div>
               {savedFeedback && (
                 <div style={{ fontSize: '9px', color: 'var(--success)', marginTop: '3px', textAlign: 'center' }}>
-                  ✓ Feedback recorded for this session!
+                  ✓ Saved
                 </div>
               )}
             </div>

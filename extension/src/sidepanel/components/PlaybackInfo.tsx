@@ -8,7 +8,6 @@ interface PlaybackInfoProps {
   totalBlocks: number;
   currentBlock: TextBlock | null;
   activeEngine?: 'piper' | 'kokoro';
-  onSwitchToPiper?: () => void;
 }
 
 export const PlaybackInfo: React.FC<PlaybackInfoProps> = ({
@@ -16,102 +15,63 @@ export const PlaybackInfo: React.FC<PlaybackInfoProps> = ({
   currentIndex,
   totalBlocks,
   currentBlock,
-  activeEngine = 'piper',
-  onSwitchToPiper
+  activeEngine = 'piper'
 }) => {
   const currentNum = totalBlocks > 0 ? currentIndex + 1 : 0;
   const progressPct = totalBlocks > 0 ? Math.round((currentNum / totalBlocks) * 100) : 0;
 
-  const getStatusLabel = () => {
-    if (state === 'SYNTHESIZING') {
-      if (activeEngine === 'kokoro') {
-        // Kokoro runs at ~8.7x real time on this class of CPU, so the honest figure for
-        // a full paragraph is minutes, not the "~15s" this panel used to promise.
-        const eta = currentBlock ? formatDuration(estimateSynthSeconds('kokoro', currentBlock.text)) : null;
-        return eta ? `Synthesizing Kokoro (~${eta})...` : 'Synthesizing Kokoro (slow)...';
-      }
-      const eta = currentBlock ? formatDuration(estimateSynthSeconds('piper', currentBlock.text)) : null;
-      return eta ? `Synthesizing Piper (~${eta})...` : 'Synthesizing Piper (Fast)...';
-    }
-
+  // The engine is already the selected tab above, so the status owes the user one
+  // thing only: the wait. Kokoro's ETA is minutes, not the "~15s" this panel once
+  // promised, so it is stated as a duration and nothing else.
+  const statusLabel = (): string | null => {
     switch (state) {
+      case 'SYNTHESIZING': {
+        const eta = currentBlock ? formatDuration(estimateSynthSeconds(activeEngine, currentBlock.text)) : null;
+        return eta ? `Synthesizing ${eta}` : 'Synthesizing';
+      }
       case 'PLAYING': return 'Reading';
       case 'PAUSED': return 'Paused';
-      case 'EXTRACTING': return 'Extracting...';
-      case 'COMPLETED': return 'Completed';
+      case 'EXTRACTING': return 'Extracting';
+      case 'COMPLETED': return 'Done';
       case 'READY': return 'Ready';
-      default: return 'Idle';
+      default: return null;
     }
   };
 
+  const label = statusLabel();
+
+  // Nothing read yet means nothing to show: the two action buttons below are the
+  // entire empty state, so the old "Click Read Page or select text to read" line
+  // and the duplicate "Fast Piper" escape hatch are both gone.
+  if (state === 'IDLE' && totalBlocks === 0) return null;
+
   return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px' }}>
-        <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
-          PARAGRAPH {currentNum} / {totalBlocks}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div className="spread">
+        <span className="meta" style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+          {totalBlocks > 0 ? `${currentNum} / ${totalBlocks}` : ''}
         </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-          {state === 'SYNTHESIZING' && activeEngine === 'kokoro' && onSwitchToPiper && (
-            <button
-              onClick={onSwitchToPiper}
-              style={{
-                fontSize: '9px',
-                padding: '1px 5px',
-                borderRadius: '3px',
-                backgroundColor: 'var(--primary)',
-                color: '#fff',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-              title="Cancel Kokoro and switch to high-speed Piper immediately"
-            >
-              ⚡ Fast Piper
-            </button>
-          )}
-          <span style={{
-            padding: '1px 6px',
-            borderRadius: '3px',
-            fontWeight: 600,
-            fontSize: '9.5px',
-            backgroundColor: state === 'PLAYING'
-              ? 'var(--primary-light)'
-              : state === 'SYNTHESIZING'
-              ? 'rgba(245, 158, 11, 0.15)'
-              : 'var(--bg-secondary)',
-            color: state === 'PLAYING'
-              ? 'var(--primary)'
-              : state === 'SYNTHESIZING'
-              ? 'var(--accent)'
-              : 'var(--text-secondary)'
-          }}>
-            {getStatusLabel()}
+        {label && (
+          <span className="chip" data-tone={state === 'PLAYING' ? 'active' : state === 'SYNTHESIZING' ? 'busy' : undefined}>
+            {label}
           </span>
-        </div>
+        )}
       </div>
 
-      <div className="progress-bar">
-        <div className="progress-fill" style={{ width: `${progressPct}%` }} />
-      </div>
-
-      {currentBlock ? (
-        <div style={{
-          backgroundColor: 'var(--bg-secondary)',
-          borderRadius: 'var(--radius-sm)',
-          padding: '6px 8px',
-          fontSize: '11px',
-          lineHeight: 1.4,
-          color: 'var(--text-primary)',
-          maxHeight: '55px',
-          overflowY: 'auto',
-          borderLeft: '3px solid var(--accent)'
-        }}>
-          {currentBlock.text}
-        </div>
-      ) : (
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', padding: '6px 0' }}>
-          Click "Read Page" or select text to read.
+      {totalBlocks > 0 && (
+        <div
+          className="progress-bar"
+          role="progressbar"
+          aria-label="Reading progress"
+          aria-valuenow={progressPct}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div className="progress-fill" style={{ width: `${progressPct}%` }} />
         </div>
       )}
+
+      {currentBlock && <div className="paragraph">{currentBlock.text}</div>}
     </div>
   );
 };
