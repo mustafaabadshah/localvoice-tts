@@ -13,9 +13,9 @@ LocalVoice reads entire webpages naturally, exactly as written, paragraph by par
 * **55 Local Voices**: 1 high-speed Piper voice (`en_US-lessac-medium`) + 54 diverse Kokoro voice styles (American, British, and international accents).
 * **Universal Webpage Extractor**: 4-tier extraction hierarchy that accurately parses **Google Gmail active email views**, HTML5 semantic articles, SPA leaf nodes, and selected text snippets.
 * **Live Extraction Diagnostics**: Inspect extracted DOM metadata (blocks, character/word counts, duration, and selector strategies) with a single click.
-* **Side-by-Side Comparison & Benchmark Mode**: Test both engines on identical passages sequentially, compare latency, duration, and RTF, and audition voices side-by-side with 5-star ratings.
+* **Side-by-Side Comparison & Benchmark Mode**: Synthesise the same passage on both engines sequentially, compare latency, duration, RTF and peak RAM, audition either voice, and record a one-tap preference (Piper / Kokoro / Tie).
 * **Strict Sequential Model Isolation**: Explicit `unload()` cycles and Python garbage collection guarantee that both heavy neural models never co-exist in RAM, maintaining a peak working set under 350 MB on 8 GB systems.
-* **Compact Extension Interface**: Pixel-perfect traditional popup layout (350 px width) with native responsive dark and light modes.
+* **Quiet Side Panel UI**: Controls and facts only — no taglines, helper sentences or secondary labels. State is a dot, a chip and two tabular numbers; long waits are shown as a duration with the cheaper engine one click away. Native light and dark modes.
 
 ---
 
@@ -107,6 +107,7 @@ To stop the backend daemon:
 | `.\scripts\benchmark_engines.ps1` | Runs sequential benchmarks comparing Piper vs Kokoro latency, RTF, and RAM. |
 | `.\scripts\diagnose_extraction.ps1` | Tests webpage extraction logic across test HTML files. |
 | `.\scripts\test_backend.ps1` | Runs all 15 automated pytest suites covering cache, engines, health, and synthesis. |
+| `.\scripts\verify.ps1` | Typechecks and builds the extension, then runs the backend suite — the single gate before committing. |
 | `.\scripts\build_extension.ps1` | Runs TypeScript compilation and Vite build with IIFE content-script wrapping. |
 | `.\scripts\download_voice.ps1` | Downloads additional Piper community voices by ID. |
 
@@ -126,6 +127,7 @@ To stop the backend daemon:
 * [V2.2 Prefetch Hand-off Fix](docs/v2_2_prefetch_handoff_fix.md) — duplicate POSTs at paragraph boundaries.
 * [V2.2 Kokoro Pace Guard](docs/v2_2_kokoro_pace_guard.md) — why Kokoro is CPU-bound and what the UI promises.
 * [V2.3 Audio Pipeline Hardening](docs/v2_3_audio_pipeline_hardening.md) — the `play()` AbortError that killed reads after 5–6 paragraphs, the double-applied speed multiplier, warm start, and the end-to-end latency budget.
+* [V2.4 Interface Pass](docs/v2_4_interface_simplification.md) — every helper sentence removed from the panel, replaced by layout, numbers and one context-aware control.
 
 ---
 
@@ -162,6 +164,9 @@ The architecture in one line: **content script** extracts paragraphs → **backg
 messages → **side panel** owns the reading state machine, synthesis requests and prefetching →
 **offscreen document** plays the audio → **FastAPI backend** synthesises on demand and caches by
 hash. See [docs/architecture.md](docs/architecture.md).
+
+Changing something? Read [AGENTS.md](AGENTS.md) first: one-command verification, the six
+invariants that must not break, and the UI copy contract the panel is built on.
 
 ---
 
