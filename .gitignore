@@ -6,12 +6,23 @@ __pycache__/
 .venv/
 backend/.venv/
 backend/cache/
-backend/voices/piper/*.onnx
-backend/voices/piper/*.onnx.json
-backend/voices/kokoro/*.onnx
-backend/voices/kokoro/*.bin
 backend/server.pid
 .pytest_cache/
+.ruff_cache/
+
+# Downloaded TTS models — NOT redistributed with this repository.
+# scripts/setup.ps1 (Piper) and scripts/install_kokoro.ps1 (Kokoro) fetch them on first run,
+# and backend/app/services/voice_manager.py discovers whatever lands in backend/voices/.
+backend/voices/*.onnx
+backend/voices/*.onnx.json
+backend/voices/*.bin
+backend/voices/piper/
+backend/voices/kokoro/
+
+# Generated audio / logs
+*.wav
+*.mp3
+*.log
 
 # Node / Extension
 extension/node_modules/
