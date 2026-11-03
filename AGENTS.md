@@ -5,11 +5,16 @@ verifiable from the code; nothing here is aspirational.
 
 ## What this is
 
-A Chrome MV3 side panel that reads a webpage aloud with **local** neural TTS.
+A Chrome MV3 extension that reads a webpage aloud with **local** neural TTS.
+
+The UI is its own 400×680 popup window, opened from the toolbar icon. Not the Chrome side
+panel (it shrinks the page being read) and not an action popup (that closes the instant the
+user clicks back into the article, and the reading loop lives in the UI, so the session
+would die after the current paragraph).
 
 ```text
-content script  →  background  →  side panel  →  offscreen document  →  FastAPI
-extract blocks     route msgs     state machine   one <audio> element     synth + cache
+content script → background → popup window → offscreen document → FastAPI
+extract blocks   route msgs   reading loop   one <audio> element  synth + cache
 ```
 
 Piper (~0.2× RTF) is the daily driver. Kokoro (82M, ~8.7× RTF on a 2-core CPU) trades speed
@@ -70,12 +75,13 @@ The panel shows **controls and facts**. It does not explain itself.
 
 | Concern | File |
 | :--- | :--- |
-| Reading loop, prefetch, pause/resume/next/prev | `extension/src/sidepanel/state/readingStateMachine.ts` |
+| Reading loop, prefetch, pause/resume/next/prev | `extension/src/ui/state/readingStateMachine.ts` |
 | Playback + AbortError classification | `extension/src/offscreen/audio_player.ts`, `shared/audioErrors.ts` |
 | 4-tier page extraction, selection capture | `extension/src/content/extractor.ts` |
 | Highlighting and auto-scroll | `extension/src/content/highlighter.ts` |
 | Engine cost model / ETAs | `extension/src/shared/enginePerf.ts` |
-| Panel layout and copy | `extension/src/sidepanel/components/` |
+| Window open/focus, offscreen lifecycle, message routing | `extension/src/background/index.ts` |
+| Panel layout and copy | `extension/src/ui/components/` |
 | Backend routes | `backend/app/api/` |
 | Engines, LRU audio cache, voices | `backend/app/services/` |
 | Defect write-ups | `docs/` (one file per fix, linked from the README changelog) |

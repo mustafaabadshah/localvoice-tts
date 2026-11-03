@@ -10,7 +10,7 @@ LocalVoice is designed from the ground up for strict local privacy, minimal reso
    - Generated speech is cached on disk using SHA-256 keys with an LRU eviction threshold of **250 MB**.
 4. **Decoupled Client-Server Protocol**:
    - **Backend**: FastAPI + Piper TTS daemon bound exclusively to `127.0.0.1:8765`.
-   - **Frontend**: Chrome Manifest V3 extension featuring Side Panel UI and Offscreen Audio Playback.
+   - **Frontend**: Chrome Manifest V3 extension featuring a standalone popup-window UI and Offscreen Audio Playback.
 
 ---
 
@@ -21,7 +21,7 @@ LocalVoice is designed from the ground up for strict local privacy, minimal reso
 │                        CHROME BROWSER (MV3)                            │
 │                                                                        │
 │   ┌──────────────────┐    Message     ┌────────────────────────────┐  │
-│   │   Content Script │◄──────────────►│    Side Panel UI (React)   │  │
+│   │   Content Script │◄──────────────►│      Popup UI (React)      │  │
 │   │ (DOM Extractor & │                │ (State Machine, Controls,  │  │
 │   │   Highlighter)   │                │   Voice/Speed Selector)    │  │
 │   └──────────────────┘                └─────────────┬──────────────┘  │

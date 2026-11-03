@@ -15,7 +15,7 @@ LocalVoice reads entire webpages naturally, exactly as written, paragraph by par
 * **Live Extraction Diagnostics**: Inspect extracted DOM metadata (blocks, character/word counts, duration, and selector strategies) with a single click.
 * **Side-by-Side Comparison & Benchmark Mode**: Synthesise the same passage on both engines sequentially, compare latency, duration, RTF and peak RAM, audition either voice, and record a one-tap preference (Piper / Kokoro / Tie).
 * **Strict Sequential Model Isolation**: Explicit `unload()` cycles and Python garbage collection guarantee that both heavy neural models never co-exist in RAM, maintaining a peak working set under 350 MB on 8 GB systems.
-* **Quiet Side Panel UI**: Controls and facts only — no taglines, helper sentences or secondary labels. State is a dot, a chip and two tabular numbers; long waits are shown as a duration with the cheaper engine one click away. Native light and dark modes.
+* **Quiet Popup UI**: the panel is its own 400×680 popup window, so reading never shrinks or covers the page it reads. Controls and facts only — no taglines, helper sentences or secondary labels. State is a dot, a chip and two tabular numbers; long waits are shown as a duration with the cheaper engine one click away. Native light and dark modes.
 
 ---
 
@@ -94,7 +94,7 @@ To stop the backend daemon:
    Building from scratch instead? Run `.\scripts\build_extension.ps1` (or `npm install && npm run build`
    inside `extension/`) — it regenerates `extension\dist` from `extension/src`.
 5. Pin the **LocalVoice** icon to your Chrome toolbar.
-6. Open any article, Gmail message, or the included `test_page.html`, and click the extension icon to begin listening!
+6. Open any article, Gmail message, or the included `test_page.html`, and click the extension icon. LocalVoice opens in its own popup window and keeps reading while you scroll, click and switch tabs beneath it.
 
 ---
 
@@ -128,6 +128,7 @@ To stop the backend daemon:
 * [V2.2 Kokoro Pace Guard](docs/v2_2_kokoro_pace_guard.md) — why Kokoro is CPU-bound and what the UI promises.
 * [V2.3 Audio Pipeline Hardening](docs/v2_3_audio_pipeline_hardening.md) — the `play()` AbortError that killed reads after 5–6 paragraphs, the double-applied speed multiplier, warm start, and the end-to-end latency budget.
 * [V2.4 Interface Pass](docs/v2_4_interface_simplification.md) — every helper sentence removed from the panel, replaced by layout, numbers and one context-aware control.
+* [V2.5 Popup Surface](docs/v2_5_popup_window.md) — the UI moved out of Chrome's side panel into its own popup window: why the toolbar icon opens a `type: 'popup'` window, and why an action popup would have killed the reading loop.
 
 ---
 
@@ -152,7 +153,7 @@ backend/            FastAPI service (127.0.0.1:8765)
 extension/          Chrome MV3 extension (TypeScript + React + Vite)
   src/background/   service worker: message router, offscreen lifecycle
   src/content/      extractor (4-tier hierarchy) + highlighter
-  src/sidepanel/    React UI, settings, comparison modal, reading state machine
+  src/ui/           React UI, settings, comparison modal, reading state machine
   src/offscreen/    hidden document that owns the single <audio> element
   src/shared/       types, error classification, engine performance model
 docs/               architecture, extraction, benchmarks, and the defect reports above
@@ -161,7 +162,7 @@ artifacts/          recorded benchmark output (JSON) used by the performance rep
 ```
 
 The architecture in one line: **content script** extracts paragraphs → **background** routes
-messages → **side panel** owns the reading state machine, synthesis requests and prefetching →
+messages → **popup UI** owns the reading state machine, synthesis requests and prefetching →
 **offscreen document** plays the audio → **FastAPI backend** synthesises on demand and caches by
 hash. See [docs/architecture.md](docs/architecture.md).
 
