@@ -21,6 +21,7 @@ class PiperEngine(BaseTTSEngine):
         self._lock = threading.Lock()
         self.current_voice_id: str | None = None
         self._loaded_voice: piper.PiperVoice | None = None
+        self._unload_pending: bool = False
         
         # Operational Metrics
         self.total_requests: int = 0
@@ -116,12 +117,29 @@ class PiperEngine(BaseTTSEngine):
         return loaded
 
     def unload(self) -> None:
-        """Explicitly unloads any loaded voice from memory."""
-        with self._lock:
-            if self._loaded_voice is not None:
-                logger.info(f"Unloading voice {self.current_voice_id}")
-                self._loaded_voice = None
-                self.current_voice_id = None
+        """
+        Explicitly unloads any loaded voice from memory without ever blocking.
+
+        If a synthesis pass is in flight the voice is released the moment that pass
+        finishes, so an engine switch never has to wait on an active request.
+        """
+        acquired = self._lock.acquire(blocking=False)
+        if not acquired:
+            self._unload_pending = True
+            logger.info("Piper unload deferred until the in-flight synthesis completes")
+            return
+        try:
+            self._unload_pending = False
+            self._release_voice()
+        finally:
+            self._lock.release()
+
+    def _release_voice(self) -> None:
+        """Drops the loaded voice. The caller must hold ``self._lock``."""
+        if self._loaded_voice is not None:
+            logger.info(f"Unloading voice {self.current_voice_id}")
+            self._loaded_voice = None
+            self.current_voice_id = None
 
     def validate_voice(self, voice_id: str) -> bool:
         meta = voice_manager.get_voice(voice_id)
@@ -206,6 +224,11 @@ class PiperEngine(BaseTTSEngine):
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Speech synthesis failed: {str(e)}"
                 )
+            finally:
+                # Honour an unload() that was requested while this pass was running
+                if self._unload_pending:
+                    self._unload_pending = False
+                    self._release_voice()
 
     def health_check(self) -> dict:
         installed_voices = voice_manager.list_voices()

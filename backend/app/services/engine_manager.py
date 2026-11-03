@@ -72,8 +72,6 @@ class EngineManager:
 
                 self.active_engine_id = engine_id
 
-            # Initialize new engine
-            target_engine.initialize()
             return target_engine.get_engine_info()
 
     def list_voices(self, engine_id: str | None = None) -> list[dict]:

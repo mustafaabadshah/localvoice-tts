@@ -42,6 +42,8 @@ class KokoroEngine(BaseTTSEngine):
         self._lock = threading.Lock()
         self.current_voice_id: str | None = None
         self._kokoro = None
+        self._voice_ids_cache: list[str] | None = None
+        self._unload_pending: bool = False
         
         # Operational Metrics
         self.total_requests: int = 0
@@ -70,25 +72,44 @@ class KokoroEngine(BaseTTSEngine):
         except Exception:
             return False
 
+    def _voice_ids(self) -> list[str]:
+        """
+        Returns the installed Kokoro voice ids without instantiating the 82M model.
+
+        Building a ``Kokoro`` object creates a full ONNX inference session (~3-6 s of
+        CPU on this class of hardware), so it must never happen on read-only paths
+        such as ``/api/v1/health`` or ``/api/v1/voices``. The voice styles live in an
+        ``.npz`` archive, so the member names can be read directly and cached.
+        """
+        if self._kokoro is not None:
+            return list(self._kokoro.get_voices())
+
+        if self._voice_ids_cache is not None:
+            return self._voice_ids_cache
+
+        try:
+            import numpy as np
+
+            with np.load(str(self.voices_path)) as voice_pack:
+                self._voice_ids_cache = sorted(voice_pack.files)
+            logger.info(f"Read {len(self._voice_ids_cache)} Kokoro voice ids from {self.voices_path.name}")
+            return self._voice_ids_cache
+        except Exception as e:
+            logger.error(f"Failed to read Kokoro voice pack {self.voices_path}: {e}")
+            return []
+
     def list_voices(self) -> list[dict]:
         """Dynamically inspects and lists all voices available in the voices file."""
         if not self.is_installed():
             return []
 
         try:
-            # We can inspect the voice styles from voices.bin
-            # If not yet loaded, create lightweight instance to read keys
-            from kokoro_onnx import Kokoro
-            temp_voices: list[str] = []
-            if self._kokoro is not None:
-                temp_voices = self._kokoro.get_voices()
-            else:
-                # Read from Kokoro instance or cached list
-                k = Kokoro(str(self.model_path), str(self.voices_path))
-                temp_voices = k.get_voices()
+            voice_ids = self._voice_ids()
+            if not voice_ids:
+                return []
 
             voices_meta = []
-            for v_id in sorted(temp_voices):
+            for v_id in voice_ids:
                 prefix = v_id[:2]
                 lang_info = KOKORO_LANG_MAP.get(prefix, ("en_US", "English (US)", "Speaker", "en-us"))
                 
@@ -168,21 +189,39 @@ class KokoroEngine(BaseTTSEngine):
                 return True
             except Exception as e:
                 logger.error(f"Failed to initialize KokoroEngine: {e}")
-                self.unload()
+                # Already holding self._lock, so release directly instead of unload()
+                self._release_model()
                 return False
 
     def unload(self) -> None:
-        """Releases all model references and runs explicit garbage collection to free RAM."""
-        with self._lock:
-            if self._kokoro is not None:
-                logger.info("Unloading Kokoro TTS engine from RAM")
-                self._kokoro = None
-                self.current_voice_id = None
-                gc.collect()
+        """
+        Releases all model references and runs explicit garbage collection to free RAM.
+
+        This call never blocks. If a synthesis pass is currently in flight, the model is
+        released as soon as that pass finishes instead of stalling the caller (engine
+        switching, comparison benchmarks, and diagnostics all call this on the hot path).
+        """
+        acquired = self._lock.acquire(blocking=False)
+        if not acquired:
+            self._unload_pending = True
+            logger.info("Kokoro unload deferred until the in-flight synthesis completes")
+            return
+        try:
+            self._unload_pending = False
+            self._release_model()
+        finally:
+            self._lock.release()
+
+    def _release_model(self) -> None:
+        """Drops the ONNX session and frees RAM. The caller must hold ``self._lock``."""
+        if self._kokoro is not None:
+            logger.info("Unloading Kokoro TTS engine from RAM")
+            self._kokoro = None
+            self.current_voice_id = None
+            gc.collect()
 
     def validate_voice(self, voice_id: str) -> bool:
-        voices = self.list_voices()
-        return any(v["voice_id"] == voice_id for v in voices)
+        return voice_id in self._voice_ids()
 
     def synthesize(
         self,
@@ -260,6 +299,11 @@ class KokoroEngine(BaseTTSEngine):
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Kokoro speech synthesis failed: {str(e)}"
                 )
+            finally:
+                # Honour an unload() that was requested while this pass was running
+                if self._unload_pending:
+                    self._unload_pending = False
+                    self._release_model()
 
     def health_check(self) -> dict:
         installed = self.is_installed()
