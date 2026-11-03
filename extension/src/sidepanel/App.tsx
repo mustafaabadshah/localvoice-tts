@@ -20,6 +20,12 @@ import {
 } from '../shared/types';
 import { DEFAULT_BACKEND_URL, STORAGE_KEYS } from '../shared/constants';
 import { describeBackendError } from '../shared/errors';
+import {
+  ENGINE_RTF,
+  estimatePageSynthSeconds,
+  formatDuration,
+  isSlowerThanRealtime
+} from '../shared/enginePerf';
 import { ReadingEngine } from './state/readingStateMachine';
 import { browserAdapter } from '../adapters/browser_adapter';
 
@@ -152,6 +158,19 @@ export const App: React.FC = () => {
     }
   };
 
+  /**
+   * Kokoro is ~43x more expensive than Piper on a 2-core CPU, so a full-page read with
+   * it stalls for minutes at every paragraph. This switches to Piper *and* resumes at the
+   * paragraph being read, instead of dropping the user back into a stopped player.
+   */
+  const handleReadWithPiper = async () => {
+    const resumeAt = currentIndex;
+    await handleSelectEngine('piper');
+    if (blocks.length > 0) {
+      await engineRef.current?.startReading(resumeAt);
+    }
+  };
+
   // Actions
   const handleReadPage = async () => {
     setErrorMessage(null);
@@ -246,7 +265,7 @@ export const App: React.FC = () => {
       await engineRef.current?.pause();
     } else if (readingState === 'PAUSED') {
       await engineRef.current?.resume();
-    } else if (readingState === 'READY' || readingState === 'COMPLETED' || (readingState === 'IDLE' && blocks.length > 0)) {
+    } else if (readingState === 'READY' || readingState === 'COMPLETED' || readingState === 'ERROR' || (readingState === 'IDLE' && blocks.length > 0)) {
       await engineRef.current?.startReading(currentIndex);
     } else if (readingState === 'IDLE') {
       await handleReadPage();
@@ -307,6 +326,18 @@ export const App: React.FC = () => {
   const activeVoices = settings.selectedEngine === 'kokoro' ? kokoroVoices : piperVoices;
   const activeSelectedVoiceId = settings.selectedEngine === 'kokoro' ? settings.selectedKokoroVoiceId : settings.selectedPiperVoiceId;
 
+  // Pace guard: warn *before* burning minutes of CPU on an engine that cannot keep up.
+  // Prefetching cannot compensate for an engine with RTF > 1, so the only honest fix is to
+  // surface the cost up front and make the switch to Piper a single click.
+  const kokoroPageSeconds = estimatePageSynthSeconds('kokoro', blocks);
+  const piperPageSeconds = estimatePageSynthSeconds('piper', blocks);
+  const kokoroPerParagraphSeconds = blocks.length > 0 ? kokoroPageSeconds / blocks.length : 0;
+  const showKokoroPaceWarning =
+    settings.selectedEngine === 'kokoro' &&
+    blocks.length > 1 &&
+    isSlowerThanRealtime('kokoro') &&
+    kokoroPageSeconds >= 60;
+
   return (
     <div className="panel-container">
       {/* Header with Dual Engine Toggle */}
@@ -334,6 +365,48 @@ export const App: React.FC = () => {
           Backend not reachable at <strong style={{ color: 'var(--text-primary)' }}>{settings.backendUrl}</strong>.
           <br />
           Start it with <strong style={{ color: 'var(--text-primary)' }}>.\scripts\start.ps1</strong> in the LocalVoice folder.
+        </div>
+      )}
+
+      {/* Kokoro pace guard - Kokoro is ~8.7x slower than real time on a 2-core CPU, so a
+          full-page read spends far longer synthesising than listening. Say so up front
+          instead of stalling silently at every paragraph. */}
+      {showKokoroPaceWarning && (
+        <div style={{
+          backgroundColor: 'var(--bg-secondary)',
+          border: '1px solid var(--accent)',
+          borderRadius: 'var(--radius-sm)',
+          padding: '6px 10px',
+          color: 'var(--text-secondary)',
+          fontSize: '10.5px',
+          lineHeight: 1.4,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '6px'
+        }}>
+          <span>
+            <strong style={{ color: 'var(--accent)' }}>Kokoro is slower than real time on this CPU.</strong>{' '}
+            It needs about <strong style={{ color: 'var(--text-primary)' }}>{formatDuration(kokoroPerParagraphSeconds)}</strong> of
+            CPU per paragraph ({ENGINE_RTF.kokoro.toFixed(1)}x slower than playback), so this {blocks.length}-paragraph
+            page costs roughly <strong style={{ color: 'var(--text-primary)' }}>{formatDuration(kokoroPageSeconds)}</strong> of
+            synthesis. Piper needs {formatDuration(piperPageSeconds)} for the same page and never pauses.
+          </span>
+          <button
+            onClick={handleReadWithPiper}
+            style={{
+              alignSelf: 'flex-start',
+              fontSize: '10px',
+              padding: '3px 8px',
+              borderRadius: '3px',
+              backgroundColor: 'var(--primary)',
+              color: '#fff',
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+            title="Switch to Piper and continue from the current paragraph"
+          >
+            ⚡ Continue with Fast Piper
+          </button>
         </div>
       )}
 
@@ -367,7 +440,7 @@ export const App: React.FC = () => {
         totalBlocks={blocks.length}
         currentBlock={currentBlock}
         activeEngine={settings.selectedEngine}
-        onSwitchToPiper={() => handleSelectEngine('piper')}
+        onSwitchToPiper={handleReadWithPiper}
       />
 
       {/* Action Buttons & Playback Controls */}

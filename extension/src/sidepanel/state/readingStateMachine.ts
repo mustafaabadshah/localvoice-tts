@@ -1,5 +1,6 @@
 import { ReadingState, TextBlock, LocalVoiceSettings, TTSEngineType } from '../../shared/types';
 import { describeBackendError } from '../../shared/errors';
+import { isSupersededPlaybackError } from '../../shared/audioErrors';
 import { browserAdapter } from '../../adapters/browser_adapter';
 
 export interface ReadingEngineListener {
@@ -18,7 +19,13 @@ export class ReadingEngine {
   private abortController: AbortController | null = null;
   private prefetchAbortController: AbortController | null = null;
   private prefetchBuffer: Map<string, string> = new Map();
-  private prefetchInFlight: boolean = false;
+  /**
+   * The single prefetch request currently on the wire, tagged with the block it will
+   * produce. Kept as a promise (not a boolean) so a paragraph transition can *wait* for
+   * the audio instead of asking the backend to synthesise the same text a second time.
+   */
+  private prefetchInFlight: { seq: number; blockId: string; promise: Promise<void> } | null = null;
+  private prefetchSeq: number = 0;
   private activeAudioUrl: string | null = null;
   private activeTabId: number | null = null;
 
@@ -31,7 +38,7 @@ export class ReadingEngine {
       if (message.type === 'AUDIO_ENDED') {
         this.handleAudioEnded(message.blockId);
       } else if (message.type === 'AUDIO_ERROR') {
-        this.handleAudioError(message.error);
+        this.handleAudioError(message.error, message.blockId);
       } else if (message.type === 'TAB_NAVIGATED') {
         if (this.activeTabId && message.tabId === this.activeTabId) {
           this.stop();
@@ -61,13 +68,10 @@ export class ReadingEngine {
     }
 
     if (speedChanged) {
+      // The speed multiplier is baked into the audio by the engine itself (Piper length_scale,
+      // Kokoro speed), so audio buffered for the old speed is unusable and must be dropped. The
+      // block already playing keeps its original pace; the next one picks up the new speed.
       this.clearPrefetchBuffer();
-      if (this.state === 'PLAYING' || this.state === 'PAUSED') {
-        chrome.runtime.sendMessage({
-          type: 'SET_AUDIO_SPEED',
-          speed: newSettings.playbackSpeed
-        }).catch(() => {});
-      }
     }
   }
 
@@ -96,7 +100,7 @@ export class ReadingEngine {
       this.prefetchAbortController.abort();
       this.prefetchAbortController = null;
     }
-    this.prefetchInFlight = false;
+    this.prefetchInFlight = null;
     for (const url of this.prefetchBuffer.values()) {
       URL.revokeObjectURL(url);
     }
@@ -116,60 +120,143 @@ export class ReadingEngine {
       URL.revokeObjectURL(this.activeAudioUrl);
     }
     this.activeAudioUrl = audioUrl;
+    // Chrome reaps the offscreen document when it looks idle, so re-assert it before every
+    // hand-off - the prefetched path skips the synthesis block that used to do this.
+    await chrome.runtime.sendMessage({ type: 'ENSURE_OFFSCREEN' }).catch(() => {});
+    // Playback rate stays 1.0: the backend already applies the speed multiplier while
+    // synthesising (Piper length_scale, Kokoro speed). Also passing it here made a 1.25x
+    // selection actually play at 1.56x, and 1.5x at 2.25x, which is why sped-up Piper sounded
+    // rushed and artefact-heavy.
     await chrome.runtime.sendMessage({
       type: 'PLAY_AUDIO',
       audioUrl,
       blockId,
-      speed: this.settings.playbackSpeed
+      speed: 1.0
     });
   }
 
   /**
-   * Starts synthesizing the next paragraph while the current one plays, so the
-   * hand-off is instant instead of paying the full synthesis latency again.
-   * Only one block is buffered at a time to keep memory flat on 8 GB machines.
+   * How many blocks ahead to keep synthesised.
+   *
+   * Piper runs at RTF ~0.2, so preparing two blocks costs a fraction of the time the current one
+   * takes to speak and it covers the case where the next block is unusually long. Kokoro runs at
+   * RTF 8.66+, where a second queued request would only delay the block the user is waiting for,
+   * so it keeps a single block in reserve.
    */
-  private triggerPrefetchNext(): void {
-    if (this.prefetchInFlight || this.prefetchBuffer.size > 0) return;
-    const nextIndex = this.currentIndex + 1;
-    if (nextIndex >= this.blocks.length) return;
-    const nextBlock = this.blocks[nextIndex];
-    if (this.prefetchBuffer.has(nextBlock.id)) return;
-    void this.prefetchBlock(nextBlock);
+  private get prefetchDepth(): number {
+    return this.settings.selectedEngine === 'kokoro' ? 1 : 2;
   }
 
-  private async prefetchBlock(block: TextBlock): Promise<void> {
+  /**
+   * Starts synthesizing the upcoming paragraphs while the current one plays, so the
+   * hand-off is instant instead of paying the full synthesis latency again.
+   */
+  private triggerPrefetchNext(): void {
+    // Never start a request for a session that is no longer reading (stop, completion,
+    // error, or a chained call that lands after the reader was stopped).
+    if (this.state !== 'PLAYING' && this.state !== 'PAUSED' && this.state !== 'SYNTHESIZING') {
+      return;
+    }
+
+    const upcoming: TextBlock[] = [];
+    for (let offset = 1; offset <= this.prefetchDepth; offset++) {
+      const block = this.blocks[this.currentIndex + offset];
+      if (!block) break;
+      upcoming.push(block);
+    }
+
+    // Drop buffered audio that is not for a block we are about to play. A leftover entry
+    // used to wedge prefetching permanently: the size-based guard below saw a stale URL and
+    // returned early, so every following paragraph had to be synthesised from scratch.
+    const upcomingIds = new Set(upcoming.map((block) => block.id));
+    for (const [blockId, url] of Array.from(this.prefetchBuffer.entries())) {
+      if (!upcomingIds.has(blockId)) {
+        URL.revokeObjectURL(url);
+        this.prefetchBuffer.delete(blockId);
+      }
+    }
+
+    if (upcoming.length === 0) return;
+
+    const pending = this.prefetchInFlight;
+    if (pending) {
+      // A request for a block we have since navigated away from would waste engine time.
+      if (!upcomingIds.has(pending.blockId)) {
+        this.prefetchAbortController?.abort();
+        void pending.promise.then(() => this.triggerPrefetchNext());
+      }
+      return;
+    }
+
+    const missing = upcoming.find((block) => !this.prefetchBuffer.has(block.id));
+    if (!missing) return;
+
+    void this.prefetchBlock(missing).then(() => {
+      // Fill the remaining slot - but only when the request actually produced audio, so a
+      // failing block cannot turn into an unbounded retry loop.
+      if (this.prefetchBuffer.has(missing.id)) {
+        this.triggerPrefetchNext();
+      }
+    });
+  }
+
+  /**
+   * Synthesises `block` in the background and parks the resulting blob URL in the buffer.
+   * The returned promise settles once the buffer has (or has not) been filled, so callers
+   * can await it instead of issuing a duplicate request for the same paragraph.
+   */
+  private prefetchBlock(block: TextBlock): Promise<void> {
     const engine = this.settings.selectedEngine;
+    const speed = this.settings.playbackSpeed;
     const targetVoiceId = engine === 'kokoro'
       ? this.settings.selectedKokoroVoiceId
       : this.settings.selectedPiperVoiceId;
 
-    this.prefetchInFlight = true;
-    this.prefetchAbortController = new AbortController();
-    try {
-      const response = await fetch(`${this.settings.backendUrl}/api/v1/synthesize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: block.text,
-          engine,
-          voice_id: targetVoiceId || undefined,
-          speed: this.settings.playbackSpeed
-        }),
-        signal: this.prefetchAbortController.signal
-      });
+    const seq = ++this.prefetchSeq;
+    const controller = new AbortController();
+    this.prefetchAbortController = controller;
 
-      if (response.ok) {
+    let release: () => void = () => {};
+    const settled = new Promise<void>((resolve) => { release = resolve; });
+    this.prefetchInFlight = { seq, blockId: block.id, promise: settled };
+
+    void (async () => {
+      try {
+        const response = await fetch(`${this.settings.backendUrl}/api/v1/synthesize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: block.text,
+            engine,
+            voice_id: targetVoiceId || undefined,
+            speed
+          }),
+          signal: controller.signal
+        });
+
+        if (!response.ok) return;
+
         const audioBlob = await response.blob();
-        // Discard the result if the engine changed while the request was in flight
-        if (this.settings.selectedEngine !== engine) return;
+        // Discard the result if engine, speed or the buffer changed while in flight
+        if (
+          controller.signal.aborted ||
+          this.settings.selectedEngine !== engine ||
+          this.settings.playbackSpeed !== speed
+        ) {
+          return;
+        }
         this.prefetchBuffer.set(block.id, URL.createObjectURL(audioBlob));
+      } catch {
+        // Prefetch failure or abort is non-fatal - the block is fetched on demand
+      } finally {
+        if (this.prefetchInFlight?.seq === seq) {
+          this.prefetchInFlight = null;
+        }
+        release();
       }
-    } catch {
-      // Prefetch failure or abort is non-fatal - the block is fetched on demand
-    } finally {
-      this.prefetchInFlight = false;
-    }
+    })();
+
+    return settled;
   }
 
   public setContent(blocks: TextBlock[], tabId: number): void {
@@ -180,6 +267,33 @@ export class ReadingEngine {
     this.activeTabId = tabId;
     this.setState(blocks.length > 0 ? 'READY' : 'IDLE');
     this.listener.onBlockChange(0, blocks[0] || null);
+    this.warmStart();
+  }
+
+  /**
+   * Synthesises the opening blocks while the panel sits idle, so that pressing Play starts
+   * speaking immediately instead of waiting out a full synthesis pass (Piper needs ~6 s for a
+   * typical paragraph, which the user currently spends staring at "Ready").
+   *
+   * Piper only: a Kokoro warm-up would hold the engine lock for ~40 s per block and would
+   * stall an engine switch or the "Continue with Fast Piper" fallback.
+   *
+   * Anything parked here is discarded by clearPrefetchBuffer() on stop/switch, and warming a
+   * block the user never plays costs nothing beyond CPU time already spent.
+   */
+  private warmStart(): void {
+    if (this.settings.selectedEngine !== 'piper') return;
+    const first = this.blocks[0];
+    if (!first || this.prefetchInFlight || this.prefetchBuffer.has(first.id)) return;
+
+    void this.prefetchBlock(first).then(() => {
+      // A short opening block (usually a heading) is over in about a second, so queue the first
+      // real paragraph behind it as well - otherwise the reader starts instantly and then stalls.
+      const next = this.blocks[1];
+      if (!next || this.state !== 'READY' || this.prefetchInFlight) return;
+      if (first.text.length > 120 || this.prefetchBuffer.has(next.id)) return;
+      void this.prefetchBlock(next);
+    });
   }
 
   public async startReading(fromIndex: number = 0): Promise<void> {
@@ -228,8 +342,24 @@ export class ReadingEngine {
       this.currentIndex++;
       await this.processCurrentBlock();
     } else {
-      await this.stop();
+      await this.finish();
     }
+  }
+
+  /**
+   * End of the page: keep the position (so Play resumes at the last paragraph instead of
+   * jumping back to the top) and report COMPLETED instead of silently snapping to IDLE.
+   */
+  private async finish(): Promise<void> {
+    this.clearPrefetchBuffer();
+    this.releaseActiveAudio();
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+    await chrome.runtime.sendMessage({ type: 'STOP_AUDIO' }).catch(() => {});
+    await this.clearHighlights();
+    this.setState('COMPLETED');
   }
 
   public async prevParagraph(): Promise<void> {
@@ -264,8 +394,18 @@ export class ReadingEngine {
       }).catch(() => {});
     }
 
-    // 2. Play the already-prefetched block if one is buffered for this paragraph
-    const prefetchedUrl = this.prefetchBuffer.get(currentBlock.id);
+    // 2. Play the buffered block, or wait out the prefetch already on the wire.
+    //    Without that wait the panel posted a duplicate request for the same paragraph, the
+    //    backend serialised the two on the engine lock, and the user watched "Synthesizing..."
+    //    for seconds between paragraphs while the audio was already being produced.
+    let prefetchedUrl = this.prefetchBuffer.get(currentBlock.id);
+    const pendingPrefetch = this.prefetchInFlight;
+    if (!prefetchedUrl && pendingPrefetch && pendingPrefetch.blockId === currentBlock.id) {
+      this.setState('SYNTHESIZING');
+      await pendingPrefetch.promise;
+      prefetchedUrl = this.prefetchBuffer.get(currentBlock.id);
+    }
+
     if (prefetchedUrl) {
       this.prefetchBuffer.delete(currentBlock.id);
       this.setState('PLAYING');
@@ -326,8 +466,19 @@ export class ReadingEngine {
     }
   }
 
-  private handleAudioError(error: string): void {
+  private handleAudioError(error: string, blockId?: string): void {
     if (this.state === 'STOPPING' || this.state === 'IDLE') return;
+
+    // A pending play() rejects with AbortError the moment the element is given a new source or
+    // paused - i.e. on every paragraph hand-off. Treating that as a failure aborted the whole
+    // session a few paragraphs into a read with "Audio playback error: The play() request was
+    // interrupted by a new load request".
+    if (isSupersededPlaybackError(error)) return;
+
+    // An error attributed to a block we have already moved past cannot affect what plays now.
+    const currentBlock = this.blocks[this.currentIndex];
+    if (blockId && currentBlock && blockId !== currentBlock.id) return;
+
     this.clearPrefetchBuffer();
     this.releaseActiveAudio();
     this.setState('ERROR');

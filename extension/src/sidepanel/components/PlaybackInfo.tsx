@@ -1,5 +1,6 @@
 import React from 'react';
 import { ReadingState, TextBlock } from '../../shared/types';
+import { estimateSynthSeconds, formatDuration } from '../../shared/enginePerf';
 
 interface PlaybackInfoProps {
   state: ReadingState;
@@ -22,11 +23,18 @@ export const PlaybackInfo: React.FC<PlaybackInfoProps> = ({
   const progressPct = totalBlocks > 0 ? Math.round((currentNum / totalBlocks) * 100) : 0;
 
   const getStatusLabel = () => {
+    if (state === 'SYNTHESIZING') {
+      if (activeEngine === 'kokoro') {
+        // Kokoro runs at ~8.7x real time on this class of CPU, so the honest figure for
+        // a full paragraph is minutes, not the "~15s" this panel used to promise.
+        const eta = currentBlock ? formatDuration(estimateSynthSeconds('kokoro', currentBlock.text)) : null;
+        return eta ? `Synthesizing Kokoro (~${eta})...` : 'Synthesizing Kokoro (slow)...';
+      }
+      const eta = currentBlock ? formatDuration(estimateSynthSeconds('piper', currentBlock.text)) : null;
+      return eta ? `Synthesizing Piper (~${eta})...` : 'Synthesizing Piper (Fast)...';
+    }
+
     switch (state) {
-      case 'SYNTHESIZING':
-        return activeEngine === 'kokoro'
-          ? 'Synthesizing Kokoro (~15s)...'
-          : 'Synthesizing Piper (Fast)...';
       case 'PLAYING': return 'Reading';
       case 'PAUSED': return 'Paused';
       case 'EXTRACTING': return 'Extracting...';
