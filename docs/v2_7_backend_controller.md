@@ -48,9 +48,22 @@ Two details are load-bearing on Windows:
   this class of box (measured, see below). `/start` blocks until the engine answers, so the extension
   gets "running" or a real failure, never a race it has to retry.
 
-The idle loop wakes every 5 s (`--idle-seconds`, default `900`). It only stops something that is
-actually up, and re-arms the clock when there is nothing to stop, so a stopped backend does not cause
-a health probe every 5 s forever.
+The idle loop wakes every 5 s (`--idle-seconds`, default `900`) and takes a single health probe per
+tick. That probe decides two things: whether the idle window has expired, and whether something that
+was up has gone away on its own — which it logs, because an engine that dies without a stop request is
+otherwise indistinguishable from one the user turned off:
+
+```
+[controller] backend went away without a stop request - the next read will restart it
+```
+
+- **One controller per port, enforced twice.** `main()` first asks `/status` on its own port and exits
+  with `a controller is already serving 127.0.0.1:8766 (backend running, pid 8704) - exiting` if the
+  answer comes back, then binds with `allow_reuse_address = False`. The second half matters on
+  Windows, where `SO_REUSEADDR` means "let anyone bind this port too": two controllers would share
+  8766 with separate idle clocks, and one of them (a leftover from a test with a short window) would
+  eventually `taskkill` the other's backend with nothing in the log to explain it. Verified: a
+  duplicate exits in under a second and the running backend keeps its PID.
 
 ## Installation
 
@@ -102,6 +115,8 @@ that is no longer running.
 | `/stop` while playing nothing | backend's `/api/v1/health` unreachable within ~1 s, port released |
 | Idle stop, `--idle-seconds 8` | backend gone at `+15 s`, logged `idle for 8s - unloading the backend` |
 | `--idle-seconds 900` (default) | `idle_remaining_seconds: 899` immediately after boot |
+| Untouched for 5 min at `--idle-seconds 900` | still `backend=running` at `+300 s` (no idle stop, no probe noise) |
+| Second controller on the same port | exits `< 1 s`, logs `a controller is already serving … - exiting`, backend PID unchanged |
 | `/start` from the logon-task instance (`pythonw.exe`, no console) | identical behaviour, 24.4 s cold |
 
 That 11–25 s spread is why `/start` waits on `/api/v1/health` instead of a fixed sleep, and why the
@@ -115,6 +130,8 @@ popup shows `Backend warm-up` rather than a spinner: the number is real, it is j
   supervises services there; the HTTP contract is unchanged.
 - **One backend per machine.** The controller supervises `127.0.0.1:8765`; a manually started
   backend on the same port is adopted, not duplicated.
+- **One controller per port.** A second instance refuses to start rather than sharing 8766, so
+  `-Action status` is the way to ask the logon-task instance what it is doing.
 - **`start.ps1` still works.** It is now the manual escape hatch rather than the normal path; if both
   are used, the controller adopts whatever is already listening.
 

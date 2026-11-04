@@ -270,18 +270,30 @@ class BackendSupervisor:
     # ---------------------------------------------------------------- idle
 
     def idle_loop(self) -> None:
+        """
+        One probe per tick: it decides "is it idle?" and, just as importantly, notices an engine
+        that died on its own. A silent disappearance is the one failure mode this supervisor
+        cannot otherwise report - the extension simply sees "stopped" and starts it again.
+        """
+        was_up = False
         while not self._shutdown.wait(5):
+            up = self.is_up(timeout=0.5)
+            if was_up and not up:
+                log("backend went away without a stop request - the next read will restart it")
+            was_up = up
+
             if self.idle_seconds <= 0:
                 continue
             if time.monotonic() - self._last_activity < self.idle_seconds:
                 continue
-            if not self.is_up(timeout=0.5):
-                # Nothing to stop: restart the clock instead of probing every 5 seconds.
+            if not up:
+                # Nothing to stop: re-arm the clock instead of deciding "idle" forever.
                 self.touch()
                 continue
             log(f"idle for {self.idle_seconds}s - unloading the backend")
             self.stop(reason="idle")
             self.touch()
+            was_up = False
 
     def shutdown(self) -> None:
         self._shutdown.set()
@@ -360,6 +372,24 @@ class ControllerHandler(BaseHTTPRequestHandler):
             self._send({"error": str(exc)}, status=500)
 
 
+class ControllerServer(ThreadingHTTPServer):
+    # Windows reads SO_REUSEADDR as "let anyone else bind this port too", so two controllers
+    # can end up sharing 8766 - each with its own idle clock, one of them stopping the other's
+    # backend with no log line in between. Refuse the second bind instead.
+    allow_reuse_address = False
+    daemon_threads = True
+
+
+def probe_existing_controller(port: int, timeout: float = 1.5) -> str | None:
+    """Summary line of a controller already serving this port, or None if the port is free."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/status", timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001 - anything here just means "nothing useful is listening"
+        return None
+    return f"backend {data.get('backend')}, pid {data.get('pid')}"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="LocalVoice backend controller")
     parser.add_argument("--port", type=int, default=DEFAULT_CONTROLLER_PORT)
@@ -373,11 +403,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--start-timeout", type=int, default=DEFAULT_START_TIMEOUT_SECONDS)
     args = parser.parse_args(argv)
 
+    existing = probe_existing_controller(args.port)
+    if existing is not None:
+        log(f"a controller is already serving 127.0.0.1:{args.port} ({existing}) - exiting")
+        return 1
+
     supervisor = BackendSupervisor(args.backend_url, args.idle_seconds, args.start_timeout)
     handler = type("BoundControllerHandler", (ControllerHandler,), {"supervisor": supervisor})
 
     try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
+        httpd = ControllerServer(("127.0.0.1", args.port), handler)
     except OSError as exc:
         log(f"port {args.port} unavailable ({exc}) - a controller is probably already running")
         return 1

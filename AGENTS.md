@@ -73,7 +73,12 @@ Breaking one of these is a regression, not a preference.
    request, and the offscreen player is what sends `/touch` while audio runs. Anything that keeps
    audio alive without keeping that heartbeat alive will be unloaded mid-read; anything that sends
    `/touch` while idle defeats auto-off.
-8. **Auto-start is a recovery path, not the primary one.** `synthesize()` retries after `/start`
+8. **Exactly one controller may serve a port, and it says so.** `main()` probes `/status` before
+   binding and exits if a controller answers; the socket also declines `SO_REUSEADDR`, because on
+   Windows that flag lets a second process share the port with its own idle clock — the failure it
+   causes (one instance killing the other's engine, nothing logged) cost an hour once. Do not run
+   `controller.py` by hand while the logon task is active; use `scripts\controller.ps1 -Action status`.
+9. **Auto-start is a recovery path, not the primary one.** `synthesize()` retries after `/start`
    exactly once, never on `AbortError` (a deliberate stop must stay stopped) and never in a loop: a
    controller that is installed but broken must surface the original `Failed to fetch`, not a timeout
    stack.
