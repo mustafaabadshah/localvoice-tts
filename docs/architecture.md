@@ -10,7 +10,7 @@ LocalVoice is designed from the ground up for strict local privacy, minimal reso
    - Generated speech is cached on disk using SHA-256 keys with an LRU eviction threshold of **250 MB**.
 4. **Decoupled Client-Server Protocol**:
    - **Backend**: FastAPI + Piper TTS daemon bound exclusively to `127.0.0.1:8765`.
-   - **Frontend**: Chrome Manifest V3 extension featuring a standalone popup-window UI and Offscreen Audio Playback.
+   - **Frontend**: Chrome Manifest V3 extension featuring a toolbar action popup (`action.default_popup`) and Offscreen Audio Playback.
 
 ---
 
@@ -93,6 +93,23 @@ LocalVoice is designed from the ground up for strict local privacy, minimal reso
    │  COMPLETED   │ (Clears highlights, resets to top)
    └──────────────┘
 ```
+
+### Session resume
+
+The state machine lives in the popup document, and Chrome destroys that document the moment the
+user clicks into the page. The session therefore outlives its own UI in three pieces:
+
+| Piece | Where | Why |
+| :--- | :--- | :--- |
+| `ReadingSessionSnapshot` (blocks, index, tab id + URL, engine, speed, `savedAt`) | `chrome.storage.session` | Survives the popup, dies with the browser session so no stale article is resurrected later |
+| The audio element and `currentBlockId` | Offscreen document | Independent of the popup, so the current paragraph keeps playing after it closes |
+| `GET_PLAYBACK_STATE` (`blockId`, `playing`, `hasSource`, position) | Popup → offscreen | Tells a freshly opened popup whether it is re-attaching to live audio or to a bookmark |
+
+On open the popup restores as **PLAYING** when the player still holds the current block, and as
+**PAUSED** otherwise. A paused *bookmark* has no audio behind it (its blob URL belonged to the
+closed document), so Play re-synthesises the paragraph — the backend answers that from its disk
+cache — instead of resuming an element with no source. Snapshots older than 30 minutes, or whose
+tab no longer exists or no longer holds the same URL, are discarded.
 
 ---
 

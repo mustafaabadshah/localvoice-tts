@@ -8,6 +8,7 @@ import { VoiceSelector } from './components/VoiceSelector';
 import { SettingsModal } from './components/SettingsModal';
 import { DiagnosticsModal } from './components/DiagnosticsModal';
 import { ComparisonModal } from './components/ComparisonModal';
+import { BackendPower } from './components/BackendPower';
 
 import {
   ReadingState,
@@ -17,10 +18,20 @@ import {
   LocalVoiceSettings,
   ExtractionResult,
   ExtractionDiagnostics,
-  TTSEngineType
+  TTSEngineType,
+  ReadingSessionSnapshot,
+  PlaybackState,
+  ControllerStatus
 } from '../shared/types';
-import { DEFAULT_BACKEND_URL, STORAGE_KEYS } from '../shared/constants';
+import {
+  DEFAULT_BACKEND_URL,
+  DEFAULT_CONTROLLER_URL,
+  STORAGE_KEYS,
+  RESUME_TTL_MS,
+  MAX_SESSION_SNAPSHOT_CHARS
+} from '../shared/constants';
 import { describeBackendError } from '../shared/errors';
+import { readControllerStatus, startBackend, stopBackend } from '../shared/backendControl';
 import {
   estimatePageSynthSeconds,
   formatDuration,
@@ -38,7 +49,8 @@ export const App: React.FC = () => {
     selectedKokoroVoiceId: 'af_heart',
     playbackSpeed: 1.0,
     autoScroll: true,
-    highlightEnabled: true
+    highlightEnabled: true,
+    autoStartBackend: true
   });
 
   // Reading Engine State
@@ -63,37 +75,150 @@ export const App: React.FC = () => {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [comparisonOpen, setComparisonOpen] = useState(false);
 
+  // Where a reopened popup picked the read back up. Shown once, because a player that looks
+  // ready but sits mid-page needs one line of explanation.
+  const [resumeNotice, setResumeNotice] = useState<string | null>(null);
+
+  // The controller that starts/stops the backend. null = nothing on 127.0.0.1:8766, which is
+  // the honest state on a clone that never ran scripts\controller.ps1.
+  const [controller, setController] = useState<ControllerStatus | null>(null);
+  const [backendBusy, setBackendBusy] = useState(false);
+
   // Engine Ref
   const engineRef = useRef<ReadingEngine | null>(null);
 
-  // 1. Initialize Settings and Engine on Mount
-  useEffect(() => {
-    browserAdapter.getStorage<LocalVoiceSettings>(STORAGE_KEYS.SETTINGS).then((saved) => {
-      if (saved) {
-        setSettings((prev) => ({ ...prev, ...saved }));
-      }
-    });
+  /**
+   * The document the current session belongs to. The engine tracks the tab id but not the URL,
+   * and URL identity is what makes a saved session safe to restore: a reused tab id must not
+   * resurrect a different article's paragraph list.
+   */
+  const sessionMetaRef = useRef<{ tabId: number; pageUrl: string } | null>(null);
 
+  /**
+   * Picks a read back up where the last popup left it.
+   *
+   * An action popup is destroyed the moment the user clicks into the page, and the ReadingEngine
+   * that drives a read lives in that document - so without this every click on the page silently
+   * ended the session and reopening showed an empty player while audio kept streaming.
+   *
+   * Returns false when there is nothing trustworthy to restore. The saved position is only a
+   * promise about one document, so the tab has to still exist and still hold the same URL.
+   */
+  const restoreSession = async (
+    engine: ReadingEngine,
+    effective: LocalVoiceSettings
+  ): Promise<boolean> => {
+    const snapshot = await browserAdapter
+      .getSessionStorage<ReadingSessionSnapshot>(STORAGE_KEYS.SESSION)
+      .catch(() => null);
+    const discard = async (): Promise<boolean> => {
+      await browserAdapter.removeSessionStorage(STORAGE_KEYS.SESSION).catch(() => {});
+      return false;
+    };
+
+    if (!snapshot || snapshot.version !== 1 || !Array.isArray(snapshot.blocks) || snapshot.blocks.length === 0) {
+      return false;
+    }
+
+    const age = Date.now() - snapshot.savedAt;
+    if (!Number.isFinite(age) || age < 0 || age > RESUME_TTL_MS) return discard();
+
+    let tabUrl: string | undefined;
+    try {
+      tabUrl = (await chrome.tabs.get(snapshot.tabId))?.url;
+    } catch {
+      return discard();
+    }
+    if (snapshot.pageUrl && tabUrl !== snapshot.pageUrl) return discard();
+
+    // Speaking the rest of the page in a different voice is not a continuation of the same read.
+    if (snapshot.engine !== effective.selectedEngine || snapshot.playbackSpeed !== effective.playbackSpeed) {
+      return discard();
+    }
+
+    // Is the offscreen player still holding this paragraph? Then the popup was closed mid-speech
+    // and the read never stopped; otherwise the saved position is only a bookmark.
+    const playback = await browserAdapter
+      .sendRuntimeMessage<PlaybackState>({ type: 'GET_PLAYBACK_STATE' })
+      .catch(() => null);
+    const savedBlockId = snapshot.blocks[snapshot.currentIndex]?.id;
+    const liveAudio = Boolean(playback?.hasSource && savedBlockId && playback.blockId === savedBlockId);
+    const stillPlaying = Boolean(liveAudio && playback?.playing);
+
+    // The paragraph the closed popup was speaking may have run to its end with nobody listening
+    // for the 'ended' event - the one thing a snapshot cannot know.
+    const resumeIndex =
+      !playback?.hasSource && snapshot.state === 'PLAYING'
+        ? Math.min(snapshot.currentIndex + 1, snapshot.blocks.length - 1)
+        : snapshot.currentIndex;
+
+    setPageTitle(snapshot.pageTitle || 'Untitled Webpage');
+    setBlocks(snapshot.blocks);
+    sessionMetaRef.current = { tabId: snapshot.tabId, pageUrl: snapshot.pageUrl };
+    engine.restore(
+      snapshot.blocks,
+      snapshot.tabId,
+      resumeIndex,
+      stillPlaying ? 'PLAYING' : 'PAUSED',
+      liveAudio
+    );
+    if (liveAudio) engine.resumePrefetch();
+
+    const position = `${resumeIndex + 1} / ${snapshot.blocks.length}`;
+    setResumeNotice(
+      stillPlaying
+        ? `Still reading ${position} — reopened`
+        : `Resumed at ${position} — press play to continue`
+    );
+    return true;
+  };
+
+  // 1. Initialize settings, the engine and any session left behind by a closed popup
+  useEffect(() => {
     const engine = new ReadingEngine(settings, {
       onStateChange: (newState) => setReadingState(newState),
       onBlockChange: (idx, blk) => {
         setCurrentIndex(idx);
         setCurrentBlock(blk);
       },
-      onError: (err) => setErrorMessage(err)
+      onError: (err) => setErrorMessage(err),
+      // A 15 s warm-up is not an error, but 15 s of silence looks like one.
+      onNotice: (text) => setResumeNotice(text)
     });
     engineRef.current = engine;
 
-    // Name the page before it has been read: the panel should say what it *would*
-    // read instead of showing a placeholder until the first extraction lands.
-    browserAdapter.getActiveTab().then((tab) => {
-      if (tab?.title) setPageTitle(tab.title);
-    }).catch(() => {});
+    void (async () => {
+      const saved = await browserAdapter
+        .getStorage<LocalVoiceSettings>(STORAGE_KEYS.SETTINGS)
+        .catch(() => null);
+      const effective: LocalVoiceSettings = saved ? { ...settings, ...saved } : settings;
+      if (saved) {
+        setSettings((prev) => ({ ...prev, ...saved }));
+        // Hand the engine the real settings *before* restoring: a settings update arriving after
+        // a restore would read as an engine switch and stop the playback it just re-attached to.
+        engine.updateSettings(effective);
+      }
 
-    checkBackendHealth();
-    fetchAllVoices();
+      const restored = await restoreSession(engine, effective).catch(() => false);
+      if (!restored) {
+        // Name the page before it has been read: the panel should say what it *would*
+        // read instead of showing a placeholder until the first extraction lands.
+        const tab = await browserAdapter.getActiveTab().catch(() => null);
+        if (tab?.title) setPageTitle(tab.title);
+      }
 
-    const interval = setInterval(checkBackendHealth, 5000);
+      checkBackendHealth();
+      void checkController();
+      fetchAllVoices();
+    })();
+
+    // One poll for both: "is the engine up" and "can anything start it" are two halves of the
+    // same question, and polling /status also keeps the controller's idle timer honest while
+    // the popup is open.
+    const interval = setInterval(() => {
+      void checkBackendHealth();
+      void checkController();
+    }, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -104,6 +229,54 @@ export const App: React.FC = () => {
     }
     browserAdapter.setStorage(STORAGE_KEYS.SETTINGS, settings);
   }, [settings]);
+
+  /**
+   * Persist the read so the next popup can resume it.
+   *
+   * There is no "popup is closing" event to hook - the document is torn down without warning -
+   * so the position is written as it changes. The write is debounced because one paragraph
+   * hand-off moves through SYNTHESIZING and PLAYING inside the same tick.
+   */
+  useEffect(() => {
+    const meta = sessionMetaRef.current;
+    if (!meta || blocks.length === 0) return;
+
+    const resumableState =
+      readingState === 'PLAYING' || readingState === 'PAUSED' ||
+      readingState === 'SYNTHESIZING' || readingState === 'READY'
+        ? readingState
+        : null;
+
+    if (!resumableState) {
+      // Stopped, finished, or failed: there is nothing to come back to.
+      void browserAdapter.removeSessionStorage(STORAGE_KEYS.SESSION).catch(() => {});
+      return;
+    }
+
+    const snapshot: ReadingSessionSnapshot = {
+      version: 1,
+      savedAt: Date.now(),
+      tabId: meta.tabId,
+      pageUrl: meta.pageUrl,
+      pageTitle,
+      blocks,
+      currentIndex,
+      state: resumableState,
+      engine: settings.selectedEngine,
+      playbackSpeed: settings.playbackSpeed
+    };
+
+    // storage.session holds 10 MB. Summing the text is enough to spot a page that cannot fit,
+    // and it costs one pass instead of serialising the whole snapshot on every paragraph.
+    const payloadChars = blocks.reduce((sum, block) => sum + block.text.length + block.id.length, 0);
+    if (payloadChars > MAX_SESSION_SNAPSHOT_CHARS) return;
+
+    const handle = setTimeout(() => {
+      void browserAdapter.setSessionStorage(STORAGE_KEYS.SESSION, snapshot).catch(() => {});
+    }, 250);
+
+    return () => clearTimeout(handle);
+  }, [blocks, currentIndex, readingState, pageTitle, settings.selectedEngine, settings.playbackSpeed]);
 
   const checkBackendHealth = async () => {
     try {
@@ -120,6 +293,11 @@ export const App: React.FC = () => {
       setHealth(null);
       setBackendReachable(false);
     }
+  };
+
+  const checkController = async () => {
+    const status = await readControllerStatus(DEFAULT_CONTROLLER_URL);
+    setController(status);
   };
 
   const fetchAllVoices = async () => {
@@ -213,6 +391,8 @@ export const App: React.FC = () => {
 
       setPageTitle(result.pageTitle || 'Webpage');
       setBlocks(result.blocks);
+      sessionMetaRef.current = { tabId: tab.id, pageUrl: result.pageUrl || tab.url || '' };
+      setResumeNotice(null);
       engineRef.current?.setContent(result.blocks, tab.id);
       await engineRef.current?.startReading(0);
     } catch (err: any) {
@@ -257,6 +437,8 @@ export const App: React.FC = () => {
 
       setPageTitle(result.pageTitle || 'Webpage');
       setBlocks(result.blocks);
+      sessionMetaRef.current = { tabId: tab.id, pageUrl: result.pageUrl || tab.url || '' };
+      setResumeNotice(null);
       engineRef.current?.setContent(result.blocks, tab.id);
       await engineRef.current?.startReading(0);
     } catch (err: any) {
@@ -270,16 +452,25 @@ export const App: React.FC = () => {
     if (readingState === 'PLAYING') {
       await engineRef.current?.pause();
     } else if (readingState === 'PAUSED') {
-      await engineRef.current?.resume();
+      // A restored session is paused at a bookmark, not inside audio: the blob URL it played
+      // belonged to the popup document that was closed, so resuming the element would fail.
+      // Only re-attach when the offscreen player genuinely still holds this paragraph.
+      if (engineRef.current?.canResumeInPlace()) {
+        await engineRef.current?.resume();
+      } else {
+        await engineRef.current?.startReading(currentIndex);
+      }
     } else if (readingState === 'READY' || readingState === 'COMPLETED' || readingState === 'ERROR' || (readingState === 'IDLE' && blocks.length > 0)) {
       await engineRef.current?.startReading(currentIndex);
     } else if (readingState === 'IDLE') {
       await handleReadPage();
     }
+    setResumeNotice(null);
   };
 
   const handleStop = async () => {
     await engineRef.current?.stop();
+    setResumeNotice(null);
   };
 
   const handleNext = async () => {
@@ -329,6 +520,29 @@ export const App: React.FC = () => {
     await fetch(`${settings.backendUrl}/api/v1/cache/clear`, { method: 'POST' });
   };
 
+  /**
+   * The power button. Turning the engine on is the slow direction (~15 s of ONNX loading),
+   * so the row shows "warm-up" rather than pretending the toggle was instant; turning it off
+   * is immediate and also has to clear the voice list, which described a backend that is
+   * no longer running.
+   */
+  const handleToggleBackend = async () => {
+    if (!controller || backendBusy) return;
+
+    const wantStop = controller.backend === 'running' || backendReachable === true;
+    setBackendBusy(true);
+    try {
+      const next = wantStop
+        ? await stopBackend(DEFAULT_CONTROLLER_URL)
+        : await startBackend(DEFAULT_CONTROLLER_URL);
+      if (next) setController(next);
+      await checkBackendHealth();
+      if (!wantStop) await fetchAllVoices();
+    } finally {
+      setBackendBusy(false);
+    }
+  };
+
   const activeVoices = settings.selectedEngine === 'kokoro' ? kokoroVoices : piperVoices;
   const activeSelectedVoiceId = settings.selectedEngine === 'kokoro' ? settings.selectedKokoroVoiceId : settings.selectedPiperVoiceId;
 
@@ -344,8 +558,10 @@ export const App: React.FC = () => {
     isSlowerThanRealtime('kokoro') &&
     kokoroPageSeconds >= 60;
 
+  const anyModalOpen = settingsOpen || diagnosticsOpen || comparisonOpen;
+
   return (
-    <div className="panel-container">
+    <div className="panel-container" data-modal={anyModalOpen ? 'open' : undefined}>
       {/* Header with Dual Engine Toggle */}
       <Header
         health={health}
@@ -357,16 +573,16 @@ export const App: React.FC = () => {
         disabled={readingState === 'PLAYING' || readingState === 'SYNTHESIZING'}
       />
 
-      {/* Offline is the one state that earns words: what is down, where, and the
-          single command that brings it back. */}
-      {backendReachable === false && (
-        <div className="banner" data-tone="danger">
-          <span className="status-dot offline" />
-          <span style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--danger)' }}>Offline</span>
-          <span className="meta mono">{settings.backendUrl.replace(/^https?:\/\//, '')}</span>
-          <span className="meta mono" style={{ marginLeft: 'auto' }}>.\scripts\start.ps1</span>
-        </div>
-      )}
+      {/* One row owns the backend's power state: whether it is up, where, the idle window,
+          and the toggle. It replaced the old offline banner rather than sitting beside it -
+          both answered the same question and a popup cannot afford two rows saying "down". */}
+      <BackendPower
+        status={controller}
+        backendReachable={backendReachable}
+        backendUrl={settings.backendUrl}
+        busy={backendBusy}
+        onToggle={handleToggleBackend}
+      />
 
       {/* Engine cost as one line of numbers with the escape hatch attached. Kokoro
           needs this much CPU per second of audio on a small CPU; Piper does not. */}
@@ -392,6 +608,17 @@ export const App: React.FC = () => {
         <div className="banner" data-tone="danger">
           <span style={{ color: 'var(--danger)', flex: 1, lineHeight: 1.4 }}>{errorMessage}</span>
           <button className="icon-btn" onClick={() => setErrorMessage(null)} title="Dismiss" aria-label="Dismiss">
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      {/* A reopened popup has to say where it came back to: a half-filled player with no
+          explanation reads as a bug, and one line is cheaper than re-reading the page. */}
+      {resumeNotice && (
+        <div className="banner">
+          <span className="meta" style={{ flex: 1, color: 'var(--text-primary)' }}>{resumeNotice}</span>
+          <button className="icon-btn" onClick={() => setResumeNotice(null)} title="Dismiss" aria-label="Dismiss">
             <X size={12} />
           </button>
         </div>

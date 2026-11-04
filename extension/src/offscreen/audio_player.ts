@@ -1,7 +1,33 @@
 import { ExtensionMessage } from '../shared/types';
 import { describeAudioError, isSupersededPlaybackError } from '../shared/audioErrors';
+import { touchBackendActivity } from '../shared/backendControl';
+import { DEFAULT_CONTROLLER_URL } from '../shared/constants';
 
 const audioEl = document.getElementById('localvoice-audio-element') as HTMLAudioElement;
+
+/**
+ * Idle stop is measured by the controller, and by the time a chapter is half-read the popup
+ * that started it has usually been closed for minutes. This heartbeat is what tells the
+ * controller the backend is still in use. It stops with the audio, which is exactly when
+ * the idle clock should start.
+ */
+const IDLE_HEARTBEAT_MS = 60_000;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+function startIdleHeartbeat(): void {
+  void touchBackendActivity(DEFAULT_CONTROLLER_URL);
+  if (heartbeatTimer !== null) return;
+  heartbeatTimer = setInterval(
+    () => void touchBackendActivity(DEFAULT_CONTROLLER_URL),
+    IDLE_HEARTBEAT_MS
+  );
+}
+
+function stopIdleHeartbeat(): void {
+  if (heartbeatTimer === null) return;
+  clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
+}
 
 let currentBlockId: string | null = null;
 let currentAudioUrl: string | null = null;
@@ -27,16 +53,19 @@ function reportAudioError(blockId: string, error: unknown): void {
 
 if (audioEl) {
   audioEl.addEventListener('ended', () => {
+    stopIdleHeartbeat();
     if (currentAudioUrl && currentAudioUrl.startsWith('blob:')) {
       URL.revokeObjectURL(currentAudioUrl);
       currentAudioUrl = null;
     }
     const finishedBlockId = currentBlockId || '';
     currentBlockId = null;
+    // No receiver while the popup is closed - the read stalls at the end of this paragraph, which
+    // is the documented behaviour, but it is not an error worth an unhandled rejection.
     chrome.runtime.sendMessage({
       type: 'AUDIO_ENDED',
       blockId: finishedBlockId
-    });
+    }).catch(() => {});
   });
 
   audioEl.addEventListener('error', () => {
@@ -67,6 +96,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       
       audioEl.src = message.audioUrl;
       audioEl.playbackRate = message.speed ?? 1.0;
+      startIdleHeartbeat();
       audioEl.play().catch((err) => {
         // If a newer load has taken over, this rejection is the expected cancellation of a
         // superseded play() - not something the user needs to see.
@@ -85,6 +115,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
 
     case 'RESUME_AUDIO': {
       const token = loadToken;
+      startIdleHeartbeat();
       audioEl.play().catch((err) => {
         if (token !== loadToken) return;
         reportAudioError(currentBlockId || '', err);
@@ -94,6 +125,7 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
     }
 
     case 'STOP_AUDIO': {
+      stopIdleHeartbeat();
       // Invalidate pending play(): tearing the element down rejects it with AbortError, which
       // must not be reported as a playback failure.
       loadToken++;
@@ -116,6 +148,23 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
     case 'SET_AUDIO_SPEED': {
       audioEl.playbackRate = message.speed;
       sendResponse({ status: 'speed_updated' });
+      break;
+    }
+
+    // The UI is an action popup, so it can be closed and reopened while the current paragraph
+    // is still running here. This is how the reopened popup finds out whether it is looking at
+    // a live playback it can control, or at a page with nothing loaded.
+    case 'GET_PLAYBACK_STATE': {
+      sendResponse({
+        blockId: currentBlockId,
+        playing: Boolean(currentAudioUrl) && !audioEl.paused && !audioEl.ended,
+        // A block id is the honest test: `ended` and STOP_AUDIO both clear it while leaving a
+        // dead blob URL on the element, so currentSrc alone would claim audio we can no longer
+        // resume.
+        hasSource: currentBlockId !== null && Boolean(audioEl.currentSrc),
+        position: audioEl.currentTime,
+        duration: Number.isFinite(audioEl.duration) ? audioEl.duration : 0
+      });
       break;
     }
 

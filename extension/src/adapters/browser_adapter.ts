@@ -4,6 +4,9 @@ export interface IBrowserAdapter {
   sendRuntimeMessage<T = any>(message: any): Promise<T>;
   getStorage<T = any>(key: string): Promise<T | null>;
   setStorage(key: string, value: any): Promise<void>;
+  getSessionStorage<T = any>(key: string): Promise<T | null>;
+  setSessionStorage(key: string, value: any): Promise<void>;
+  removeSessionStorage(key: string): Promise<void>;
   createOffscreenDocument(url: string, reasons: string[], justification: string): Promise<void>;
   hasOffscreenDocument(): Promise<boolean>;
 }
@@ -99,6 +102,27 @@ export class ChromeBrowserAdapter implements IBrowserAdapter {
 
   async setStorage(key: string, value: any): Promise<void> {
     await chrome.storage.local.set({ [key]: value });
+  }
+
+  /**
+   * storage.session is the only home for an in-progress read: it survives the popup document
+   * being destroyed on every click into the page, and it is wiped with the browser session so a
+   * stale article is never resurrected days later.
+   */
+  async getSessionStorage<T = any>(key: string): Promise<T | null> {
+    if (!chrome.storage?.session) return null;
+    const result = await chrome.storage.session.get(key);
+    return (result[key] as T) ?? null;
+  }
+
+  async setSessionStorage(key: string, value: any): Promise<void> {
+    if (!chrome.storage?.session) return;
+    await chrome.storage.session.set({ [key]: value });
+  }
+
+  async removeSessionStorage(key: string): Promise<void> {
+    if (!chrome.storage?.session) return;
+    await chrome.storage.session.remove(key);
   }
 
   async createOffscreenDocument(url: string, reasons: string[], justification: string): Promise<void> {

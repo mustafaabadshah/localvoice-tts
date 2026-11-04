@@ -107,6 +107,60 @@ export interface LocalVoiceSettings {
   playbackSpeed: number;
   autoScroll: boolean;
   highlightEnabled: boolean;
+  /** Wake a stopped backend through the controller instead of failing the read. */
+  autoStartBackend: boolean;
+}
+
+/**
+ * What the controller on 127.0.0.1:8766 reports. `null` from the client side always means
+ * "no controller is installed", which is a different (and much more likely) failure than
+ * "the controller says the backend is down".
+ */
+export interface ControllerStatus {
+  controller: 'ok';
+  version: string;
+  /** `starting` is honest about the ~15 s Piper warm-up; `failed` carries `error`. */
+  backend: 'running' | 'stopped' | 'starting' | 'failed';
+  pid: number | null;
+  backend_url: string;
+  /** 0 means idle stop is disabled. */
+  idle_seconds: number;
+  idle_remaining_seconds: number | null;
+  uptime_seconds?: number | null;
+  error?: string;
+}
+
+
+/**
+ * A read that outlived its popup.
+ *
+ * The UI is an action popup, which Chrome destroys the moment the user clicks into the page -
+ * taking the ReadingEngine that drives the read with it. Everything needed to rebuild that
+ * engine goes here: the blocks to speak, where we were, and which document they belong to.
+ */
+export interface ReadingSessionSnapshot {
+  version: 1;
+  savedAt: number;
+  tabId: number;
+  /** Identity, not just the tab id: a reused tab id must not resurrect someone else's article. */
+  pageUrl: string;
+  pageTitle: string;
+  blocks: TextBlock[];
+  currentIndex: number;
+  /** Only states worth coming back to are ever written. */
+  state: 'READY' | 'SYNTHESIZING' | 'PLAYING' | 'PAUSED';
+  engine: TTSEngineType;
+  playbackSpeed: number;
+}
+
+/** What the offscreen player is doing right now, so a reopened popup can re-attach to it. */
+export interface PlaybackState {
+  blockId: string | null;
+  playing: boolean;
+  /** Whether the element still holds a source that resume() can pick up. */
+  hasSource: boolean;
+  position: number;
+  duration: number;
 }
 
 export interface EngineComparisonResult {
@@ -158,4 +212,5 @@ export type ExtensionMessage =
   | { type: 'STOP_AUDIO' }
   | { type: 'AUDIO_ENDED'; blockId: string }
   | { type: 'AUDIO_ERROR'; error: string; blockId: string }
-  | { type: 'SET_AUDIO_SPEED'; speed: number };
+  | { type: 'SET_AUDIO_SPEED'; speed: number }
+  | { type: 'GET_PLAYBACK_STATE' };

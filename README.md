@@ -15,7 +15,7 @@ LocalVoice reads entire webpages naturally, exactly as written, paragraph by par
 * **Live Extraction Diagnostics**: Inspect extracted DOM metadata (blocks, character/word counts, duration, and selector strategies) with a single click.
 * **Side-by-Side Comparison & Benchmark Mode**: Synthesise the same passage on both engines sequentially, compare latency, duration, RTF and peak RAM, audition either voice, and record a one-tap preference (Piper / Kokoro / Tie).
 * **Strict Sequential Model Isolation**: Explicit `unload()` cycles and Python garbage collection guarantee that both heavy neural models never co-exist in RAM, maintaining a peak working set under 350 MB on 8 GB systems.
-* **Quiet Popup UI**: the panel is its own 400×680 popup window, so reading never shrinks or covers the page it reads. Controls and facts only — no taglines, helper sentences or secondary labels. State is a dot, a chip and two tabular numbers; long waits are shown as a duration with the cheaper engine one click away. Native light and dark modes.
+* **Quiet Popup UI**: the panel is a normal toolbar popup that Chrome sizes to its content, so reading never shrinks or covers the page it reads. Controls and facts only — no taglines, helper sentences or secondary labels. State is a dot, a chip and two tabular numbers; long waits are shown as a duration with the cheaper engine one click away. Native light and dark modes.
 
 ---
 
@@ -64,7 +64,32 @@ Optional — unlock the Kokoro engine (114 MB INT8 model + 54-voice pack):
 
 ---
 
-### Step 2: Start the Backend Daemon
+### Step 2: Install the backend controller (recommended)
+
+```powershell
+.\scripts\controller.ps1
+```
+
+One command, one logon task, and no manual backend management ever again: opening the extension and
+pressing **Read Page** starts the backend on demand (~11–15 s for the first Piper load), the popup
+gets a ⏻ power row to switch it off, and the engine unloads itself after **15 minutes without use**.
+
+```powershell
+.\scripts\controller.ps1 -IdleMinutes 30   # longer auto-off window
+.\scripts\controller.ps1 -IdleMinutes 0    # never auto-off
+.\scripts\controller.ps1 -Action status    # what the controller sees right now
+.\scripts\controller.ps1 -Action uninstall # back to manual start
+```
+
+**Why a helper process:** Chrome gives extensions no API for launching a local program, so a browser
+alone cannot start a backend. `backend/controller.py` (standard library only) listens on
+`127.0.0.1:8766` — loopback only, with the same origin whitelist as the API — and starts/stops the
+engine when the extension asks. Details: [V2.7 notes](docs/v2_7_backend_controller.md).
+
+---
+
+### Step 2 (alternative): Run the backend manually
+
 ```powershell
 .\scripts\start.ps1
 ```
@@ -76,6 +101,12 @@ To stop the backend daemon:
 ```powershell
 .\scripts\stop.ps1
 ```
+
+The first start takes ~15–25 s while the Piper ONNX voice is loaded into memory, so
+`start.ps1` waits up to 90 s before reporting failure. Server output is captured to
+`backend\logs\server.out.log` and `backend\logs\server.err.log`; `start.ps1` prints the tail
+of both when startup fails. Without the controller, the popup's row shows `Offline` and the command
+to fix it.
 
 ---
 
@@ -94,7 +125,7 @@ To stop the backend daemon:
    Building from scratch instead? Run `.\scripts\build_extension.ps1` (or `npm install && npm run build`
    inside `extension/`) — it regenerates `extension\dist` from `extension/src`.
 5. Pin the **LocalVoice** icon to your Chrome toolbar.
-6. Open any article, Gmail message, or the included `test_page.html`, and click the extension icon. LocalVoice opens in its own popup window and keeps reading while you scroll, click and switch tabs beneath it.
+6. Open any article, Gmail message, or the included `test_page.html`, and click the extension icon. LocalVoice opens as a toolbar popup sized to its content; if you click back into the page the popup closes, and reopening it resumes the read where you left it.
 
 ---
 
@@ -102,6 +133,7 @@ To stop the backend daemon:
 
 | Script | Purpose |
 | :--- | :--- |
+| `.\scripts\controller.ps1` | Registers the backend controller as a logon task: the extension starts the backend on demand, and it auto-stops after 15 idle minutes. Supports `-Action status/stop/restart/uninstall` and `-IdleMinutes n`. |
 | `.\scripts\setup.ps1` | Creates virtualenv, installs Piper, downloads Lessac voice, and builds extension. |
 | `.\scripts\install_kokoro.ps1` | Downloads Kokoro v1.0 INT8 model (114 MB) and 54-voice binary pack (28 MB). |
 | `.\scripts\benchmark_engines.ps1` | Runs sequential benchmarks comparing Piper vs Kokoro latency, RTF, and RAM. |
@@ -128,13 +160,16 @@ To stop the backend daemon:
 * [V2.2 Kokoro Pace Guard](docs/v2_2_kokoro_pace_guard.md) — why Kokoro is CPU-bound and what the UI promises.
 * [V2.3 Audio Pipeline Hardening](docs/v2_3_audio_pipeline_hardening.md) — the `play()` AbortError that killed reads after 5–6 paragraphs, the double-applied speed multiplier, warm start, and the end-to-end latency budget.
 * [V2.4 Interface Pass](docs/v2_4_interface_simplification.md) — every helper sentence removed from the panel, replaced by layout, numbers and one context-aware control.
-* [V2.5 Popup Surface](docs/v2_5_popup_window.md) — the UI moved out of Chrome's side panel into its own popup window: why the toolbar icon opens a `type: 'popup'` window, and why an action popup would have killed the reading loop.
+* [V2.5 Popup Surface](docs/v2_5_popup_window.md) — the UI moved out of Chrome's side panel into its own popup window (surface superseded by V2.6; the reasoning is kept as history).
+* [V2.6 Action Popup & Session Resume](docs/v2_6_action_popup.md) — the UI is a normal toolbar popup that Chrome sizes to its content, and a read now survives the popup closing: `storage.session` snapshot, restore-on-open, and re-attaching to audio the offscreen player never stopped playing.
+* [V2.7 Backend Controller](docs/v2_7_backend_controller.md) — the backend starts and stops itself. A stdlib-only supervisor on `127.0.0.1:8766` (installed as a logon task) wakes the engine on `Failed to fetch`, a ⏻ row in the popup switches it off, and an idle timer unloads it after 15 minutes without use — kept honest by a heartbeat from the offscreen player.
 
 ---
 
 ## 🔒 Security & Privacy Guarantee
 
 * **127.0.0.1 Binding**: The server listens exclusively on loopback and rejects external network connections.
+* **Controller is loopback-only too**: `backend/controller.py` binds `127.0.0.1:8766`, grants CORS only to `chrome-extension://` and loopback origins, and can start/stop nothing but this machine's own backend process.
 * **Origin Validation**: Cross-origin requests from arbitrary internet domains are strictly blocked.
 * **Zero Cloud Telemetry**: Webpage text, URLs, and audio never leave your local machine.
 * **Content Script Sandboxing**: Wrapped in an isolated IIFE preventing global variable leakage and prototype pollution.
@@ -145,6 +180,7 @@ To stop the backend daemon:
 
 ```text
 backend/            FastAPI service (127.0.0.1:8765)
+  controller.py     start/stop/idle supervisor the extension talks to (127.0.0.1:8766)
   app/api/          REST endpoints: health, voices, synthesis, engines, compare, metrics, settings
   app/services/     piper_engine, kokoro_engine, engine_manager, audio_cache, voice_manager
   app/utils/        security (origin checks, filename sanitising), logging
@@ -157,7 +193,7 @@ extension/          Chrome MV3 extension (TypeScript + React + Vite)
   src/offscreen/    hidden document that owns the single <audio> element
   src/shared/       types, error classification, engine performance model
 docs/               architecture, extraction, benchmarks, and the defect reports above
-scripts/            PowerShell setup / start / stop / build / benchmark helpers
+scripts/            PowerShell setup / controller / start / stop / build / benchmark helpers
 artifacts/          recorded benchmark output (JSON) used by the performance report
 ```
 

@@ -1,13 +1,21 @@
 import { ReadingState, TextBlock, LocalVoiceSettings, TTSEngineType } from '../../shared/types';
-import { describeBackendError } from '../../shared/errors';
+import { describeBackendError, isBackendUnreachable } from '../../shared/errors';
 import { isSupersededPlaybackError } from '../../shared/audioErrors';
+import { startBackend } from '../../shared/backendControl';
+import { DEFAULT_CONTROLLER_URL } from '../../shared/constants';
 import { browserAdapter } from '../../adapters/browser_adapter';
 
 export interface ReadingEngineListener {
   onStateChange: (state: ReadingState) => void;
   onBlockChange: (index: number, block: TextBlock | null) => void;
   onError: (error: string) => void;
+  /**
+   * A transient line for the popup ("Starting the local backend..."), cleared with null.
+   * A warm-up that takes 15 s is not an error, but silence for 15 s looks like one.
+   */
+  onNotice?: (text: string | null) => void;
 }
+
 
 export class ReadingEngine {
   public state: ReadingState = 'IDLE';
@@ -26,8 +34,20 @@ export class ReadingEngine {
    */
   private prefetchInFlight: { seq: number; blockId: string; promise: Promise<void> } | null = null;
   private prefetchSeq: number = 0;
+  /**
+   * The in-flight "please start the backend" call. Shared, because a cold popup makes the
+   * main request and the prefetcher fail together and both need the same one warm-up.
+   */
+  private wakePromise: Promise<boolean> | null = null;
   private activeAudioUrl: string | null = null;
   private activeTabId: number | null = null;
+  /**
+   * Set when a restored session re-attached to audio the offscreen player still holds. The blob
+   * URL belongs to the popup document that was closed, so it is not in `activeAudioUrl` - yet
+   * pause/resume on the player are valid, and treating the session as "no audio loaded" would
+   * make Play synthesise a paragraph that is already playing.
+   */
+  private restoredWithLiveAudio = false;
 
   constructor(settings: LocalVoiceSettings, listener: ReadingEngineListener) {
     this.settings = settings;
@@ -120,6 +140,9 @@ export class ReadingEngine {
       URL.revokeObjectURL(this.activeAudioUrl);
     }
     this.activeAudioUrl = audioUrl;
+    // From here on the player holds audio for the block being spoken, so resume() is valid
+    // regardless of how the session started.
+    this.restoredWithLiveAudio = false;
     // Chrome reaps the offscreen document when it looks idle, so re-assert it before every
     // hand-off - the prefetched path skips the synthesis block that used to do this.
     await chrome.runtime.sendMessage({ type: 'ENSURE_OFFSCREEN' }).catch(() => {});
@@ -222,17 +245,7 @@ export class ReadingEngine {
 
     void (async () => {
       try {
-        const response = await fetch(`${this.settings.backendUrl}/api/v1/synthesize`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            text: block.text,
-            engine,
-            voice_id: targetVoiceId || undefined,
-            speed
-          }),
-          signal: controller.signal
-        });
+        const response = await this.synthesize(block.text, engine, targetVoiceId, speed, controller.signal);
 
         if (!response.ok) return;
 
@@ -262,12 +275,48 @@ export class ReadingEngine {
   public setContent(blocks: TextBlock[], tabId: number): void {
     this.clearPrefetchBuffer();
     this.releaseActiveAudio();
+    this.restoredWithLiveAudio = false;
     this.blocks = blocks;
     this.currentIndex = 0;
     this.activeTabId = tabId;
     this.setState(blocks.length > 0 ? 'READY' : 'IDLE');
     this.listener.onBlockChange(0, blocks[0] || null);
     this.warmStart();
+  }
+
+  /**
+   * Rebuilds a session that outlived the popup document which started it.
+   *
+   * `liveAudio` means the offscreen player still holds *this* block's audio, so pause()/resume()
+   * act on real playback and the read carries on mid-sentence. Without it the position is only a
+   * bookmark: the blob URL died with the old document, so Play has to synthesise the paragraph
+   * again (cheap, because the backend serves it from its disk cache).
+   */
+  public restore(
+    blocks: TextBlock[],
+    tabId: number,
+    index: number,
+    state: ReadingState,
+    liveAudio: boolean
+  ): void {
+    this.clearPrefetchBuffer();
+    this.releaseActiveAudio();
+    this.blocks = blocks;
+    this.activeTabId = tabId;
+    this.currentIndex = Math.max(0, Math.min(index, blocks.length - 1));
+    this.restoredWithLiveAudio = liveAudio;
+    this.setState(state);
+    this.listener.onBlockChange(this.currentIndex, this.blocks[this.currentIndex] || null);
+  }
+
+  /** True when the offscreen player holds audio that pause/resume can still act on. */
+  public canResumeInPlace(): boolean {
+    return this.restoredWithLiveAudio || this.activeAudioUrl !== null;
+  }
+
+  /** Refills the prefetch buffer after a restored session re-attached to live playback. */
+  public resumePrefetch(): void {
+    this.triggerPrefetchNext();
   }
 
   /**
@@ -320,6 +369,7 @@ export class ReadingEngine {
     this.setState('STOPPING');
     this.clearPrefetchBuffer();
     this.releaseActiveAudio();
+    this.restoredWithLiveAudio = false;
     if (this.abortController) {
       this.abortController.abort();
       this.abortController = null;
@@ -426,17 +476,13 @@ export class ReadingEngine {
       // Ensure offscreen audio document is alive
       await chrome.runtime.sendMessage({ type: 'ENSURE_OFFSCREEN' }).catch(() => {});
 
-      const response = await fetch(`${this.settings.backendUrl}/api/v1/synthesize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: currentBlock.text,
-          engine: this.settings.selectedEngine,
-          voice_id: targetVoiceId || undefined,
-          speed: this.settings.playbackSpeed
-        }),
-        signal: this.abortController.signal
-      });
+      const response = await this.synthesize(
+        currentBlock.text,
+        this.settings.selectedEngine,
+        targetVoiceId,
+        this.settings.playbackSpeed,
+        this.abortController.signal
+      );
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ detail: 'Synthesis failed' }));
@@ -455,6 +501,68 @@ export class ReadingEngine {
       this.setState('ERROR');
       this.listener.onError(describeBackendError(err, this.settings.backendUrl));
     }
+  }
+
+  /**
+   * POST /api/v1/synthesize, with one recovery attempt.
+   *
+   * A stopped backend (idle auto-stop, a cold machine, a crash) looks exactly like a dead
+   * port to `fetch`. The controller on :8766 can start it, so "Failed to fetch" becomes a
+   * ~15 s warm-up instead of an error the user has to fix by hand. The retry happens at most
+   * once, and never for an abort: a deliberate stop must stay stopped.
+   */
+  private async synthesize(
+    text: string,
+    engine: TTSEngineType,
+    voiceId: string,
+    speed: number,
+    signal: AbortSignal
+  ): Promise<Response> {
+    const url = `${this.settings.backendUrl}/api/v1/synthesize`;
+    const body = JSON.stringify({
+      text,
+      engine,
+      voice_id: voiceId || undefined,
+      speed
+    });
+    const send = () =>
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal
+      });
+
+    try {
+      return await send();
+    } catch (err) {
+      if (signal.aborted || !isBackendUnreachable(err)) throw err;
+      const woke = await this.wakeBackend();
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (!woke) throw err;
+      return await send();
+    }
+  }
+
+  /**
+   * Starts the backend through the controller, once for however many callers ask.
+   *
+   * Returns false when the controller is not installed or refused: the caller then reports
+   * the original failure, which is still the honest answer.
+   */
+  private wakeBackend(): Promise<boolean> {
+    if (!this.settings.autoStartBackend) return Promise.resolve(false);
+    if (this.wakePromise) return this.wakePromise;
+
+    this.listener.onNotice?.('Starting the local backend...');
+    this.wakePromise = startBackend(DEFAULT_CONTROLLER_URL)
+      .then((status) => status?.backend === 'running')
+      .catch(() => false)
+      .finally(() => {
+        this.wakePromise = null;
+        this.listener.onNotice?.(null);
+      });
+    return this.wakePromise;
   }
 
   private handleAudioEnded(finishedBlockId: string): void {

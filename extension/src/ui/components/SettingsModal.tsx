@@ -87,6 +87,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             />
           </div>
 
+          <div className="spread">
+            <span style={{ fontSize: '11.5px' }}>Auto-start backend</span>
+            <button
+              className="switch"
+              role="switch"
+              aria-checked={localSettings.autoStartBackend}
+              aria-label="Start the backend automatically when a read needs it"
+              data-on={localSettings.autoStartBackend}
+              onClick={() => setLocalSettings({ ...localSettings, autoStartBackend: !localSettings.autoStartBackend })}
+            />
+          </div>
+
           <div className="divider" />
 
           <button

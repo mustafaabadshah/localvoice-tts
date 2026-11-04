@@ -1,5 +1,11 @@
 # V2.5 — The Popup Surface
 
+> **Superseded by [V2.6](v2_6_action_popup.md).** The UI is now a plain `action.default_popup`:
+> Chrome sizes the dropdown to the document and `windows.create` is gone. The reasoning below is
+> kept because it is the reason the session-resume layer exists — a `type: 'popup'` window was
+> chosen to keep the reading loop alive, and V2.6 solves that problem with a snapshot instead of
+> with a surface.
+
 ## Symptom
 
 The UI was a Chrome **side panel**: every launch docked a pane to the right edge of the browser

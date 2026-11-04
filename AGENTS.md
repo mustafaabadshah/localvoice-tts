@@ -7,14 +7,23 @@ verifiable from the code; nothing here is aspirational.
 
 A Chrome MV3 extension that reads a webpage aloud with **local** neural TTS.
 
-The UI is its own 400×680 popup window, opened from the toolbar icon. Not the Chrome side
-panel (it shrinks the page being read) and not an action popup (that closes the instant the
-user clicks back into the article, and the reading loop lives in the UI, so the session
-would die after the current paragraph).
+The UI is a normal toolbar popup (`"default_popup": "popup.html"`), so Chrome fits the dropdown to
+its content and destroys it the instant the user clicks into the page. Two rules follow from that:
+
+- The reading loop (`ReadingEngine`) lives in the popup document and dies with it. Progress is
+  persisted to `chrome.storage.session` as a `ReadingSessionSnapshot` and restored on the next
+  open — PAUSED at the last paragraph, or PLAYING when the offscreen player still holds that
+  paragraph's audio. Do not add session state that only exists in the popup.
+- Nothing may hardcode a surface size. `body` is `width: max-content` clamped between 340 and
+  520 px, and the document's height *is* the popup's height; modals reserve room through
+  `.panel-container[data-modal='open']` because `position: fixed` contributes no height.
 
 ```text
-content script → background → popup window → offscreen document → FastAPI
-extract blocks   route msgs   reading loop   one <audio> element  synth + cache
+content script → background → toolbar popup → offscreen document → FastAPI
+extract blocks   route msgs   reading loop    one <audio> element  synth + cache
+                                                            ↑
+                          controller (127.0.0.1:8766) ──────┘
+                          starts / idle-stops the engine
 ```
 
 Piper (~0.2× RTF) is the daily driver. Kokoro (82M, ~8.7× RTF on a 2-core CPU) trades speed
@@ -34,9 +43,14 @@ First run on a fresh clone:
 
 ```powershell
 .\scripts\setup.ps1         # venv + deps + default Piper voice + extension build
-.\scripts\start.ps1         # backend on http://127.0.0.1:8765
+.\scripts\controller.ps1    # backend starts on demand, stops after 15 idle minutes
 # chrome://extensions → Developer mode → Load unpacked → extension\dist
 ```
+
+`.\scripts\controller.ps1 -Action uninstall` (or never running it) is supported: the extension then
+falls back to `start.ps1` and the popup shows `Offline` with the command. A browser cannot spawn a
+process, so "start the backend from the extension" always needs that one helper — see
+`docs/v2_7_backend_controller.md`.
 
 ## Invariants
 
@@ -55,6 +69,14 @@ Breaking one of these is a regression, not a preference.
 5. **Models never enter git**: `backend/voices/*.onnx` and `*.onnx.json` are ignored, and
    `extension/dist` is untracked on purpose. A 63 MB blob already had to be purged once.
 6. **The backend listens on 127.0.0.1 only** and validates origins (`backend/app/utils/security.py`).
+7. **Playback owns the idle clock.** The controller stops the engine after `--idle-seconds` without a
+   request, and the offscreen player is what sends `/touch` while audio runs. Anything that keeps
+   audio alive without keeping that heartbeat alive will be unloaded mid-read; anything that sends
+   `/touch` while idle defeats auto-off.
+8. **Auto-start is a recovery path, not the primary one.** `synthesize()` retries after `/start`
+   exactly once, never on `AbortError` (a deliberate stop must stay stopped) and never in a loop: a
+   controller that is installed but broken must surface the original `Failed to fetch`, not a timeout
+   stack.
 
 ## UI contract
 
@@ -84,6 +106,8 @@ The panel shows **controls and facts**. It does not explain itself.
 | Panel layout and copy | `extension/src/ui/components/` |
 | Backend routes | `backend/app/api/` |
 | Engines, LRU audio cache, voices | `backend/app/services/` |
+| Start/stop/idle supervision of the backend | `backend/controller.py`, `scripts/controller.ps1` |
+| Controller client, power row, auto-start on failure | `extension/src/shared/backendControl.ts`, `ui/components/BackendPower.tsx`, `ui/state/readingStateMachine.ts` |
 | Defect write-ups | `docs/` (one file per fix, linked from the README changelog) |
 
 ## Definition of done

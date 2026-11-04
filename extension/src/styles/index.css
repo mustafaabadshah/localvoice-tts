@@ -43,14 +43,18 @@
   padding: 0;
 }
 
-/* The UI is its own window, so it owns the full viewport instead of a fixed panel width. */
+/* This document *is* the toolbar popup, and Chrome fits the popup to it - so the layout decides
+   the size instead of a hardcoded number. Width follows the content between a floor that keeps
+   the transport row from wrapping and a column that stays readable; height is whatever the rows
+   need, which is why nothing here sets a fixed height. */
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   line-height: 1.35;
-  width: 100%;
-  min-width: 320px;
+  width: max-content;
+  min-width: 340px;
+  max-width: 520px;
   margin: 0;
   font-size: 11px;
   overflow-x: hidden;
@@ -74,6 +78,16 @@ input, select {
   flex-direction: column;
   padding: 10px 12px;
   gap: 8px;
+  /* A popup shrink-wraps its content, and two rows of transport with nothing to read looks
+     broken rather than minimal. */
+  min-height: 240px;
+}
+
+/* Modals are position:fixed, so their height never reaches the document the popup is fitted to.
+   While one is open the shell reserves that room; without this the popup stays as tall as the
+   rows behind the modal and Settings reads as a clipped 240px strip. */
+.panel-container[data-modal='open'] {
+  min-height: 540px;
 }
 
 .card {
@@ -196,7 +210,9 @@ input, select {
   width: 100%;
   max-width: 320px;
   box-shadow: var(--shadow-md);
-  max-height: 85vh;
+  /* The popup is fitted to the document, so viewport units would feed the modal's own size back
+     into the height it is trying to fit. The overlay is the popup viewport; fill it and scroll. */
+  max-height: 100%;
   overflow-y: auto;
   font-size: 11.5px;
 }
@@ -329,7 +345,9 @@ h2 {
   border-left: 2px solid var(--accent);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   padding: 6px 8px;
-  max-height: 56px;
+  /* Tall enough for a normal two-paragraph-height block to be read without a scrollbar, capped so
+     one long paragraph cannot resize the popup mid-read. */
+  max-height: 120px;
   overflow-y: auto;
 }
 
