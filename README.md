@@ -72,7 +72,7 @@ Optional — unlock the Kokoro engine (114 MB INT8 model + 54-voice pack):
 
 One command, one logon task, and no manual backend management ever again: opening the extension and
 pressing **Read Page** starts the backend on demand (~11–15 s for the first Piper load), the popup
-gets a ⏻ power row to switch it off, and the engine unloads itself after **15 minutes without use**.
+gets a ⏻ power row to switch it off, and the engine unloads itself after **5 minutes without use**.
 
 ```powershell
 .\scripts\controller.ps1 -IdleMinutes 30   # longer auto-off window
@@ -133,7 +133,7 @@ to fix it.
 
 | Script | Purpose |
 | :--- | :--- |
-| `.\scripts\controller.ps1` | Registers the backend controller as a logon task: the extension starts the backend on demand, and it auto-stops after 15 idle minutes. Supports `-Action status/stop/restart/uninstall` and `-IdleMinutes n`. |
+| `.\scripts\controller.ps1` | Registers the backend controller as a logon task: the extension starts the backend on demand, and it auto-stops after 5 idle minutes. Supports `-Action status/stop/restart/uninstall` and `-IdleMinutes n`. |
 | `.\scripts\setup.ps1` | Creates virtualenv, installs Piper, downloads Lessac voice, and builds extension. |
 | `.\scripts\install_kokoro.ps1` | Downloads Kokoro v1.0 INT8 model (114 MB) and 54-voice binary pack (28 MB). |
 | `.\scripts\benchmark_engines.ps1` | Runs sequential benchmarks comparing Piper vs Kokoro latency, RTF, and RAM. |
@@ -162,7 +162,7 @@ to fix it.
 * [V2.4 Interface Pass](docs/v2_4_interface_simplification.md) — every helper sentence removed from the panel, replaced by layout, numbers and one context-aware control.
 * [V2.5 Popup Surface](docs/v2_5_popup_window.md) — the UI moved out of Chrome's side panel into its own popup window (surface superseded by V2.6; the reasoning is kept as history).
 * [V2.6 Action Popup & Session Resume](docs/v2_6_action_popup.md) — the UI is a normal toolbar popup that Chrome sizes to its content, and a read now survives the popup closing: `storage.session` snapshot, restore-on-open, and re-attaching to audio the offscreen player never stopped playing.
-* [V2.7 Backend Controller](docs/v2_7_backend_controller.md) — the backend starts and stops itself. A stdlib-only supervisor on `127.0.0.1:8766` (installed as a logon task) wakes the engine on `Failed to fetch`, a ⏻ row in the popup switches it off, and an idle timer unloads it after 15 minutes without use — kept honest by a heartbeat from the offscreen player.
+* [V2.7 Backend Controller](docs/v2_7_backend_controller.md) — the backend starts and stops itself. A stdlib-only supervisor on `127.0.0.1:8766` (installed as a logon task) wakes the engine on `Failed to fetch`, a ⏻ row in the popup switches it off, and an idle timer unloads it after 5 minutes without use — kept honest by a heartbeat from the offscreen player while audio plays.
 
 ---
 

@@ -21,6 +21,7 @@ the whole thing invisible.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import subprocess
@@ -35,10 +36,11 @@ from pathlib import Path
 CONTROLLER_VERSION = "1.0"
 DEFAULT_CONTROLLER_PORT = 8766
 DEFAULT_BACKEND_URL = "http://127.0.0.1:8765"
-# 15 minutes of no request means "the user stopped using the extension", not "the user is
-# reading a long article": playback itself keeps the timer alive (the offscreen player sends
-# /touch), so this only counts genuine idleness.
-DEFAULT_IDLE_SECONDS = 15 * 60
+# 5 minutes of no request means "the user stopped using the extension", not "the user is reading a
+# long article": playback itself keeps the timer alive (the offscreen player sends /touch every
+# minute), so this only counts genuine idleness. Pause is not activity - a read paused and left
+# alone for the whole window unloads too, and resuming it wakes the backend again.
+DEFAULT_IDLE_SECONDS = 5 * 60
 DEFAULT_START_TIMEOUT_SECONDS = 120
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -88,11 +90,27 @@ class BackendSupervisor:
     # ---------------------------------------------------------------- probes
 
     def is_up(self, timeout: float = 1.0) -> bool:
+        return self.probe(timeout)[0]
+
+    def probe(self, timeout: float = 1.0) -> tuple[bool, str]:
+        """
+        One health request plus the reason it failed - the reason is what the log needs.
+
+        Nothing here is allowed to raise: this runs on the idle thread, and a supervisor that dies
+        of an unexpected socket error stops supervising anything. Including `http.client` errors
+        explicitly is the point - `RemoteDisconnected` is an `OSError`, but `BadStatusLine` and
+        friends are not, and an uncaught one used to mean a dead thread and a silent controller.
+        """
         try:
             with urllib.request.urlopen(f"{self.backend_url}/api/v1/health", timeout=timeout) as response:
-                return 200 <= response.status < 300
-        except (urllib.error.URLError, OSError, ValueError):
-            return False
+                if 200 <= response.status < 300:
+                    return True, ""
+                return False, f"HTTP {response.status}"
+        except urllib.error.HTTPError as exc:
+            return False, f"HTTP {exc.code}"
+        except (urllib.error.URLError, OSError, http.client.HTTPException, ValueError) as exc:
+            detail = getattr(exc, "reason", None) or exc
+            return False, f"{type(exc).__name__}: {detail}"
 
     def _pid_from_file(self) -> int | None:
         try:
@@ -269,26 +287,62 @@ class BackendSupervisor:
 
     # ---------------------------------------------------------------- idle
 
+    def _exit_code(self) -> str:
+        """
+        How the child ended, which is the difference between a crash and a kill.
+
+        A Windows exception shows up as e.g. -1073741819 (0xC0000005, access violation), while a
+        TerminateProcess from `taskkill` usually reads -1 (0xFFFFFFFF). Without this the log said
+        only "went away", which is the one thing that is already obvious.
+        """
+        proc = self._proc
+        if proc is None:
+            return "unknown, this controller did not spawn it"
+        code = proc.poll()
+        if code is None:
+            return "still running"
+        return f"{code} (0x{code & 0xFFFFFFFF:08X})"
+
     def idle_loop(self) -> None:
         """
         One probe per tick: it decides "is it idle?" and, just as importantly, notices an engine
         that died on its own. A silent disappearance is the one failure mode this supervisor
         cannot otherwise report - the extension simply sees "stopped" and starts it again.
+
+        A single failed probe is not a death. `probe()` is one HTTP attempt with a short timeout,
+        and a transient blip on loopback reads exactly like a corpse: measured at 13:47:02, where
+        the log claimed the backend went away while `poll()` on the very child we spawned said
+        "still running" and the next tick was healthy again. So a failure is re-probed immediately
+        with a patient timeout, and the engine is only declared gone when two consecutive ticks
+        agree on it.
         """
         was_up = False
+        misses = 0
         while not self._shutdown.wait(5):
-            up = self.is_up(timeout=0.5)
-            if was_up and not up:
-                log("backend went away without a stop request - the next read will restart it")
-            was_up = up
+            up, reason = self.probe(timeout=0.5)
+            if not up:
+                up, reason = self.probe(timeout=3.0)
+            misses = 0 if up else misses + 1
+            gone = (not up) and misses >= 2
+
+            if up:
+                was_up = True
+            elif was_up and gone:
+                log(
+                    "backend went away without a stop request - "
+                    f"{reason}, exit code {self._exit_code()}; the next read will restart it"
+                )
+                was_up = False
 
             if self.idle_seconds <= 0:
                 continue
             if time.monotonic() - self._last_activity < self.idle_seconds:
                 continue
             if not up:
-                # Nothing to stop: re-arm the clock instead of deciding "idle" forever.
-                self.touch()
+                if gone:
+                    # Nothing to stop: re-arm the clock instead of deciding "idle" forever.
+                    self.touch()
+                # An unconfirmed miss is not worth resetting a 5-minute clock over.
                 continue
             log(f"idle for {self.idle_seconds}s - unloading the backend")
             self.stop(reason="idle")

@@ -43,7 +43,7 @@ First run on a fresh clone:
 
 ```powershell
 .\scripts\setup.ps1         # venv + deps + default Piper voice + extension build
-.\scripts\controller.ps1    # backend starts on demand, stops after 15 idle minutes
+.\scripts\controller.ps1    # backend starts on demand, stops after 5 idle minutes
 # chrome://extensions → Developer mode → Load unpacked → extension\dist
 ```
 
@@ -69,10 +69,12 @@ Breaking one of these is a regression, not a preference.
 5. **Models never enter git**: `backend/voices/*.onnx` and `*.onnx.json` are ignored, and
    `extension/dist` is untracked on purpose. A 63 MB blob already had to be purged once.
 6. **The backend listens on 127.0.0.1 only** and validates origins (`backend/app/utils/security.py`).
-7. **Playback owns the idle clock.** The controller stops the engine after `--idle-seconds` without a
-   request, and the offscreen player is what sends `/touch` while audio runs. Anything that keeps
-   audio alive without keeping that heartbeat alive will be unloaded mid-read; anything that sends
-   `/touch` while idle defeats auto-off.
+7. **Playback owns the idle clock.** The controller stops the engine after `--idle-seconds` (default
+   `300`, i.e. 5 minutes) without a request, and the offscreen player is what sends `/touch` while
+   audio is *playing*. Anything that keeps audio alive without keeping that heartbeat alive will be
+   unloaded mid-read; anything that sends `/touch` while idle defeats auto-off. Pause stops the
+   heartbeat on purpose — a paused read is not using the engine, and resuming wakes it up again
+   through `synthesize()`'s one retry.
 8. **Exactly one controller may serve a port, and it says so.** `main()` probes `/status` before
    binding and exits if a controller answers; the socket also declines `SO_REUSEADDR`, because on
    Windows that flag lets a second process share the port with its own idle clock — the failure it
@@ -82,6 +84,11 @@ Breaking one of these is a regression, not a preference.
    exactly once, never on `AbortError` (a deliberate stop must stay stopped) and never in a loop: a
    controller that is installed but broken must surface the original `Failed to fetch`, not a timeout
    stack.
+10. **One failed health probe is not a death.** `probe()` is a single HTTP attempt; on loopback a
+    blip reads exactly like a corpse (measured: `went away` logged while `poll()` on the spawned
+    child said `still running`). Re-probe with a longer timeout, require two consecutive misses, and
+    log the reason plus the exit code so a crash (`0xC0000005`) is distinguishable from a kill
+    (`-1`).
 
 ## UI contract
 

@@ -12,7 +12,7 @@ interface BackendPowerProps {
   onToggle: () => void;
 }
 
-/** 900 -> "15 min". Idle stop is off only when the controller was started with 0. */
+/** 300 -> "5 min", 900 -> "15 min". Idle stop is off only when the controller was started with 0. */
 function formatIdle(seconds: number): string {
   if (seconds <= 0) return 'no auto-off';
   if (seconds < 90) return `auto-off ${seconds}s`;

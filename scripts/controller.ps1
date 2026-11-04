@@ -8,7 +8,7 @@
     backend\controller.py as a logon task: it listens on 127.0.0.1:8766, starts the backend
     on demand and stops it again after -IdleMinutes without a request.
 
-        .\scripts\controller.ps1                    # install + start (auto-off after 15 min)
+        .\scripts\controller.ps1                    # install + start (auto-off after 5 min)
         .\scripts\controller.ps1 -IdleMinutes 30    # reinstall with a different idle window
         .\scripts\controller.ps1 -IdleMinutes 0     # never auto-stop
         .\scripts\controller.ps1 -Action status     # what the controller sees right now
@@ -29,7 +29,7 @@ param(
     [ValidateSet('install', 'start', 'stop', 'restart', 'status', 'uninstall')]
     [string]$Action = 'install',
 
-    [int]$IdleMinutes = 15,
+    [int]$IdleMinutes = 5,
 
     [int]$Port = 8766
 )

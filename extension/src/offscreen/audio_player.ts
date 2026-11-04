@@ -8,8 +8,10 @@ const audioEl = document.getElementById('localvoice-audio-element') as HTMLAudio
 /**
  * Idle stop is measured by the controller, and by the time a chapter is half-read the popup
  * that started it has usually been closed for minutes. This heartbeat is what tells the
- * controller the backend is still in use. It stops with the audio, which is exactly when
- * the idle clock should start.
+ * controller the backend is still in use. It runs while audio is actually playing and stops on
+ * pause, `ended` and STOP, which is exactly when the idle clock should start: the controller's
+ * window is 5 minutes, so a read paused and forgotten should unload the engine, and resuming it
+ * wakes the backend again through synthesize()'s retry.
  */
 const IDLE_HEARTBEAT_MS = 60_000;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -108,6 +110,10 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
     }
 
     case 'PAUSE_AUDIO': {
+      // A pause is a click, but the read is not using the engine until it resumes - so the
+      // heartbeat stops here and the controller's idle window starts running. Otherwise a
+      // paused read would hold the backend up all afternoon without a single request.
+      stopIdleHeartbeat();
       audioEl.pause();
       sendResponse({ status: 'paused' });
       break;
