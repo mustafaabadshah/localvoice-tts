@@ -89,6 +89,14 @@ Breaking one of these is a regression, not a preference.
     child said `still running`). Re-probe with a longer timeout, require two consecutive misses, and
     log the reason plus the exit code so a crash (`0xC0000005`) is distinguishable from a kill
     (`-1`).
+11. **Stop is the only reset to paragraph 1.** "Read Page" continues the current document at
+    `currentIndex`; it re-extracts only on a different URL, no blocks, or `COMPLETED`/`ERROR`.
+    `setContent()` is the *new document* entry point and resets the position - never call it from
+    a control that means "keep reading". See `docs/v2_8_resume_and_audio_cache.md`.
+12. **Never synthesise text you already have.** Audio is cached by `(engine, voice, speed, text)`
+    only - the backend in `audio_cache`, the extension in `shared/audioClips.ts` - and the read
+    order is buffer, clip store, network. A new cache must use the same key, because a speed or
+    voice change is baked into the audio during synthesis and a stale hit is a wrong-voice read.
 
 ## UI contract
 

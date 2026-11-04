@@ -39,6 +39,7 @@ import {
 } from '../shared/enginePerf';
 import { ReadingEngine } from './state/readingStateMachine';
 import { browserAdapter } from '../adapters/browser_adapter';
+import { clearClips } from '../shared/audioClips';
 
 export const App: React.FC = () => {
   // Settings State
@@ -323,6 +324,9 @@ export const App: React.FC = () => {
   const handleSelectEngine = async (newEngine: TTSEngineType) => {
     if (newEngine === settings.selectedEngine) return;
 
+    const resumeAt = currentIndex;
+    const total = blocks.length;
+
     // 1. Immediately abort any in-flight synthesis / audio on frontend
     engineRef.current?.switchEngine(newEngine);
 
@@ -340,6 +344,15 @@ export const App: React.FC = () => {
     } catch (e: any) {
       console.warn(`Backend engine select sync: ${e?.message}`);
     }
+
+    // 4. Keep the position. The switch is not a new read: get *this* paragraph ready so the
+    //    next Continue speaks immediately, and say where the read will resume.
+    if (total > 0) {
+      setResumeNotice(
+        `Switched to ${newEngine === 'piper' ? 'Piper' : 'Kokoro'} - continue at paragraph ${resumeAt + 1} of ${total}`
+      );
+      engineRef.current?.prepareCurrent();
+    }
   };
 
   /**
@@ -356,9 +369,18 @@ export const App: React.FC = () => {
   };
 
   // Actions
+  /**
+   * "Read Page" continues the current read; it does not restart it.
+   *
+   * It used to re-extract and call setContent() on every press, which resets the position to
+   * paragraph 1 - so every pause, reopened popup and engine switch paid for paragraph 1 again
+   * and showed "Synthesizing..." for audio the user had already heard. The page is only
+   * re-extracted when the tab really moved to another document, when there are no blocks yet,
+   * or when the last read ran to the end.
+   */
   const handleReadPage = async () => {
     setErrorMessage(null);
-    setReadingState('EXTRACTING');
+
     const tab = await browserAdapter.getActiveTab();
     if (!tab?.id) {
       setErrorMessage('No active browser tab found. Please switch to a webpage tab.');
@@ -371,6 +393,39 @@ export const App: React.FC = () => {
       setReadingState('IDLE');
       return;
     }
+
+    // Same document as the live session? Then this press means "keep going", not "start over".
+    // COMPLETED and ERROR are deliberately excluded: a finished or broken read starts clean.
+    const meta = sessionMetaRef.current;
+    const sameDocument =
+      blocks.length > 0 &&
+      meta !== null &&
+      meta.tabId === tab.id &&
+      // Hash-only navigation (in-page anchors) must not be mistaken for a new article.
+      meta.pageUrl.split('#')[0] === (tab.url || '').split('#')[0] &&
+      (readingState === 'READY' ||
+        readingState === 'PAUSED' ||
+        readingState === 'PLAYING' ||
+        readingState === 'SYNTHESIZING' ||
+        readingState === 'IDLE');
+
+    if (sameDocument) {
+      if (readingState === 'PLAYING') {
+        // Already speaking: nothing to do.
+      } else if (readingState === 'PAUSED' && engineRef.current?.canResumeInPlace()) {
+        // Mid-paragraph and the player still holds the audio: resume, don't restart it.
+        await engineRef.current?.resume();
+      } else {
+        // Speaks the paragraph the reader is on; cached audio plays without touching the engine.
+        await engineRef.current?.startReading(currentIndex);
+      }
+      setResumeNotice(
+        currentIndex > 0 ? `Continuing at paragraph ${currentIndex + 1} of ${blocks.length}` : null
+      );
+      return;
+    }
+
+    setReadingState('EXTRACTING');
 
     try {
       const result: ExtractionResult = await browserAdapter.sendMessageToTab(tab.id, { type: 'EXTRACT_PAGE' });
@@ -517,7 +572,13 @@ export const App: React.FC = () => {
   };
 
   const handleClearCache = async () => {
-    await fetch(`${settings.backendUrl}/api/v1/cache/clear`, { method: 'POST' });
+    // Both halves of the cache: the backend's disk cache and the clip store this extension keeps
+    // in IndexedDB. Clearing only the backend left the extension replaying its own copies.
+    await Promise.all([
+      fetch(`${settings.backendUrl}/api/v1/cache/clear`, { method: 'POST' }).catch(() => {}),
+      clearClips()
+    ]);
+    setResumeNotice('Cleared cached audio');
   };
 
   /**
@@ -637,10 +698,23 @@ export const App: React.FC = () => {
       />
 
       {/* Action Buttons & Playback Controls */}
+      {/* `continueAt` makes the primary button say "Continue" while a session is parked past
+          paragraph 1; COMPLETED and ERROR start the page over and keep the "Read Page" label. */}
       <Controls
         state={readingState}
         hasBlocks={blocks.length > 0}
         speed={settings.playbackSpeed}
+        continueAt={
+          currentIndex > 0 &&
+          (readingState === 'READY' ||
+            readingState === 'PAUSED' ||
+            readingState === 'PLAYING' ||
+            readingState === 'SYNTHESIZING' ||
+            readingState === 'IDLE')
+            ? currentIndex + 1
+            : 0
+        }
+        totalParagraphs={blocks.length}
         onReadPage={handleReadPage}
         onReadSelection={handleReadSelection}
         onPlayPause={handlePlayPause}

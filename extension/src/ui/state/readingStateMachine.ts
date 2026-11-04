@@ -4,6 +4,7 @@ import { isSupersededPlaybackError } from '../../shared/audioErrors';
 import { startBackend } from '../../shared/backendControl';
 import { DEFAULT_CONTROLLER_URL } from '../../shared/constants';
 import { browserAdapter } from '../../adapters/browser_adapter';
+import { clipKey, getClip, putClip } from '../../shared/audioClips';
 
 export interface ReadingEngineListener {
   onStateChange: (state: ReadingState) => void;
@@ -48,6 +49,12 @@ export class ReadingEngine {
    * make Play synthesise a paragraph that is already playing.
    */
   private restoredWithLiveAudio = false;
+  /**
+   * Bumped whenever the reader is reset (stop, engine switch). Any await that outlives the reset
+   * - a clip lookup, a synthesis - compares against it and drops its result, so audio can never
+   * start playing after the user has already moved on.
+   */
+  private sessionToken = 0;
 
   constructor(settings: LocalVoiceSettings, listener: ReadingEngineListener) {
     this.settings = settings;
@@ -67,9 +74,19 @@ export class ReadingEngine {
     });
   }
 
+  /** The voice id the given settings would speak with. */
+  private voiceIdFor(settings: LocalVoiceSettings): string {
+    return settings.selectedEngine === 'kokoro'
+      ? settings.selectedKokoroVoiceId
+      : settings.selectedPiperVoiceId;
+  }
+
   public updateSettings(newSettings: LocalVoiceSettings): void {
     const speedChanged = this.settings.playbackSpeed !== newSettings.playbackSpeed;
     const engineChanged = this.settings.selectedEngine !== newSettings.selectedEngine;
+    // A different voice is a different audio file for the same text, so anything already
+    // buffered or loaded belongs to a voice the user just turned off.
+    const voiceChanged = this.voiceIdFor(this.settings) !== this.voiceIdFor(newSettings);
     
     this.settings = newSettings;
 
@@ -84,6 +101,23 @@ export class ReadingEngine {
         }
         chrome.runtime.sendMessage({ type: 'STOP_AUDIO' }).catch(() => {});
         this.setState('READY');
+      }
+    }
+
+    if (voiceChanged && !engineChanged) {
+      // Same engine, new voice: drop the old-voice audio and re-synthesise the paragraph the
+      // user is on, so the switch is audible immediately instead of after the current sentence.
+      this.clearPrefetchBuffer();
+      this.releaseActiveAudio();
+      if (this.state === 'PLAYING' || this.state === 'PAUSED') {
+        // The old voice is already loaded in the player - revoking the blob URL does not silence
+        // it, so the element has to be stopped explicitly before the same text is spoken again.
+        if (this.abortController) {
+          this.abortController.abort();
+          this.abortController = null;
+        }
+        chrome.runtime.sendMessage({ type: 'STOP_AUDIO' }).catch(() => {});
+        void this.startReading(this.currentIndex);
       }
     }
 
@@ -104,8 +138,12 @@ export class ReadingEngine {
     }
     chrome.runtime.sendMessage({ type: 'STOP_AUDIO' }).catch(() => {});
     this.settings.selectedEngine = newEngine;
+    this.sessionToken++;
     if (this.blocks.length > 0) {
       this.setState('READY');
+      // Warm the paragraph the user is on, not the first one: after a switch the next thing they
+      // press is Continue, and it must not pay the engine's warm-up for audio they don't want.
+      this.warmStart(this.currentIndex);
     } else {
       this.setState('IDLE');
     }
@@ -243,8 +281,20 @@ export class ReadingEngine {
     const settled = new Promise<void>((resolve) => { release = resolve; });
     this.prefetchInFlight = { seq, blockId: block.id, promise: settled };
 
+    const identity = { engine, voiceId: targetVoiceId, speed };
+    const key = clipKey(identity, block.text);
+
     void (async () => {
       try {
+        // A paragraph this machine has already spoken in this engine/voice/speed needs no
+        // request at all: park the stored clip and skip the engine.
+        const stored = await getClip(await key);
+        if (controller.signal.aborted) return;
+        if (stored) {
+          this.prefetchBuffer.set(block.id, URL.createObjectURL(stored));
+          return;
+        }
+
         const response = await this.synthesize(block.text, engine, targetVoiceId, speed, controller.signal);
 
         if (!response.ok) return;
@@ -259,6 +309,8 @@ export class ReadingEngine {
           return;
         }
         this.prefetchBuffer.set(block.id, URL.createObjectURL(audioBlob));
+        // Keep it for the next engine switch, popup reopen or replay of this paragraph.
+        void putClip(await key, audioBlob, identity);
       } catch {
         // Prefetch failure or abort is non-fatal - the block is fetched on demand
       } finally {
@@ -330,15 +382,15 @@ export class ReadingEngine {
    * Anything parked here is discarded by clearPrefetchBuffer() on stop/switch, and warming a
    * block the user never plays costs nothing beyond CPU time already spent.
    */
-  private warmStart(): void {
+  private warmStart(index: number = this.currentIndex): void {
     if (this.settings.selectedEngine !== 'piper') return;
-    const first = this.blocks[0];
+    const first = this.blocks[index];
     if (!first || this.prefetchInFlight || this.prefetchBuffer.has(first.id)) return;
 
     void this.prefetchBlock(first).then(() => {
-      // A short opening block (usually a heading) is over in about a second, so queue the first
-      // real paragraph behind it as well - otherwise the reader starts instantly and then stalls.
-      const next = this.blocks[1];
+      // A short block (usually a heading) is over in about a second, so queue the block behind it
+      // as well - otherwise the reader starts instantly and then stalls.
+      const next = this.blocks[index + 1];
       if (!next || this.state !== 'READY' || this.prefetchInFlight) return;
       if (first.text.length > 120 || this.prefetchBuffer.has(next.id)) return;
       void this.prefetchBlock(next);
@@ -349,6 +401,19 @@ export class ReadingEngine {
     if (this.blocks.length === 0) return;
     this.currentIndex = Math.max(0, Math.min(fromIndex, this.blocks.length - 1));
     await this.processCurrentBlock();
+  }
+
+  /**
+   * Gets the current paragraph ready to play *without* starting it.
+   *
+   * Called after an engine switch, so the paragraph the user is sitting on is already synthesised
+   * (or already in the clip store) by the time they press Continue. Nothing is spoken until they
+   * ask for it, and a stale request is dropped by the prefetch abort/seq guards.
+   */
+  public prepareCurrent(): void {
+    const block = this.blocks[this.currentIndex];
+    if (!block || this.prefetchInFlight || this.prefetchBuffer.has(block.id)) return;
+    void this.prefetchBlock(block);
   }
 
   public async pause(): Promise<void> {
@@ -367,6 +432,7 @@ export class ReadingEngine {
 
   public async stop(): Promise<void> {
     this.setState('STOPPING');
+    this.sessionToken++;
     this.clearPrefetchBuffer();
     this.releaseActiveAudio();
     this.restoredWithLiveAudio = false;
@@ -432,6 +498,7 @@ export class ReadingEngine {
       return;
     }
 
+    const token = this.sessionToken;
     const currentBlock = this.blocks[this.currentIndex];
     this.listener.onBlockChange(this.currentIndex, currentBlock);
 
@@ -464,13 +531,27 @@ export class ReadingEngine {
       return;
     }
 
-    // 3. Synthesize audio from local backend
+    const engine = this.settings.selectedEngine;
+    const speed = this.settings.playbackSpeed;
+    const targetVoiceId = this.voiceIdFor(this.settings);
+
+    // 3. Audio this machine already produced for exactly this engine/voice/speed. This is the
+    //    path that makes an engine switch - or a second Read Page - instant instead of showing
+    //    "Synthesizing..." for a paragraph the user has already heard.
+    const clipIdentity = { engine, voiceId: targetVoiceId, speed };
+    const cacheKey = await clipKey(clipIdentity, currentBlock.text);
+    const storedClip = await getClip(cacheKey);
+    if (token !== this.sessionToken) return; // stopped or switched while we were reading the cache
+    if (storedClip) {
+      this.setState('PLAYING');
+      await this.startAudio(URL.createObjectURL(storedClip), currentBlock.id);
+      this.triggerPrefetchNext();
+      return;
+    }
+
+    // 4. Synthesize audio from local backend
     this.setState('SYNTHESIZING');
     this.abortController = new AbortController();
-
-    const targetVoiceId = this.settings.selectedEngine === 'kokoro'
-      ? this.settings.selectedKokoroVoiceId
-      : this.settings.selectedPiperVoiceId;
 
     try {
       // Ensure offscreen audio document is alive
@@ -478,9 +559,9 @@ export class ReadingEngine {
 
       const response = await this.synthesize(
         currentBlock.text,
-        this.settings.selectedEngine,
+        engine,
         targetVoiceId,
-        this.settings.playbackSpeed,
+        speed,
         this.abortController.signal
       );
 
@@ -491,8 +572,11 @@ export class ReadingEngine {
 
       const audioBlob = await response.blob();
       const audioUrl = URL.createObjectURL(audioBlob);
+      // Remember it: a later engine switch, a reopened popup or a replayed paragraph all need
+      // this exact audio and must not pay for the engine again.
+      void putClip(cacheKey, audioBlob, clipIdentity);
 
-      // 4. Play audio through offscreen document
+      // 5. Play audio through offscreen document
       this.setState('PLAYING');
       await this.startAudio(audioUrl, currentBlock.id);
       this.triggerPrefetchNext();

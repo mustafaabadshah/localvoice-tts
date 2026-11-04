@@ -7,6 +7,12 @@ interface ControlsProps {
   state: ReadingState;
   hasBlocks: boolean;
   speed: number;
+  /**
+   * 1-based paragraph the next Continue would speak, or 0 when the primary button should mean
+   * "start this page from the top" (no session yet, or a session still on paragraph 1).
+   */
+  continueAt?: number;
+  totalParagraphs?: number;
   onReadPage: () => void;
   onReadSelection: () => void;
   onPlayPause: () => void;
@@ -20,6 +26,8 @@ export const Controls: React.FC<ControlsProps> = ({
   state,
   hasBlocks,
   speed,
+  continueAt = 0,
+  totalParagraphs = 0,
   onReadPage,
   onReadSelection,
   onPlayPause,
@@ -32,6 +40,10 @@ export const Controls: React.FC<ControlsProps> = ({
   const isPaused = state === 'PAUSED';
   const isSynthesizing = state === 'SYNTHESIZING';
   const isActive = isPlaying || isPaused || isSynthesizing;
+  // A read that already sits past the first paragraph: the primary button continues it rather
+  // than re-extracting the page and starting over (which is what made every engine switch look
+  // like a fresh read from paragraph 1).
+  const canContinue = hasBlocks && continueAt > 1;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -41,10 +53,12 @@ export const Controls: React.FC<ControlsProps> = ({
           className="btn-primary"
           onClick={onReadPage}
           disabled={isActive}
-          title="Extract and read the full webpage"
+          title={canContinue
+            ? `Continue the current read at paragraph ${continueAt} of ${totalParagraphs}`
+            : 'Extract and read the full webpage'}
         >
           <BookOpen size={13} />
-          <span>Read Page</span>
+          <span>{canContinue ? 'Continue' : 'Read Page'}</span>
         </button>
 
         <button

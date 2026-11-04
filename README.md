@@ -163,6 +163,7 @@ to fix it.
 * [V2.5 Popup Surface](docs/v2_5_popup_window.md) — the UI moved out of Chrome's side panel into its own popup window (surface superseded by V2.6; the reasoning is kept as history).
 * [V2.6 Action Popup & Session Resume](docs/v2_6_action_popup.md) — the UI is a normal toolbar popup that Chrome sizes to its content, and a read now survives the popup closing: `storage.session` snapshot, restore-on-open, and re-attaching to audio the offscreen player never stopped playing.
 * [V2.7 Backend Controller](docs/v2_7_backend_controller.md) — the backend starts and stops itself. A stdlib-only supervisor on `127.0.0.1:8766` (installed as a logon task) wakes the engine on `Failed to fetch`, a ⏻ row in the popup switches it off, and an idle timer unloads it after 5 minutes without use — kept honest by a heartbeat from the offscreen player while audio plays.
+* [V2.8 Continue & Audio Cache](docs/v2_8_resume_and_audio_cache.md) — "Read Page" continues the current read instead of restarting at paragraph 1, the button says Continue with the paragraph number, and a 120 MB IndexedDB clip store keyed by `(engine, voice, speed, text)` means an engine switch or a reopened popup replays audio the machine already produced.
 
 ---
 
