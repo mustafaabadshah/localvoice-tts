@@ -1,8 +1,11 @@
 import threading
 import time
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+
+from app.config import settings
 from app.main import app
 from app.services.engine_manager import engine_manager
 from app.services.piper_engine import piper_engine
@@ -50,44 +53,65 @@ def test_engine_voices_filtering():
         assert kokoro_data["total_count"] >= 50
         assert any(v["voice_id"] == "af_heart" for v in kokoro_data["voices"])
 
-def test_engine_switching_and_isolation():
+def test_engine_switching_and_isolation(monkeypatch):
+    # High RSS cap: this test is about residency policy, not about the memory guard
+    monkeypatch.setattr(settings, "max_resident_rss_mb", 10_000)
+
     # Select Piper
     resp1 = client.post("/api/v1/engines/select", json={"engine": "piper"})
     assert resp1.status_code == 200
     assert engine_manager.active_engine_id == "piper"
 
-    # Synthesize with Piper
+    # Synthesize with Piper. The text is unique so this is a real pass, not a cache hit: a cached
+    # response must NOT load a model, so it could not prove the voice state below. A short hex tag
+    # keeps the sentence cheap to speak (a digit-heavy tag turns into a long spoken number).
+    probe_text = f"Piper warm synthesis probe {uuid.uuid4().hex[:8]}."
     syn_piper = client.post("/api/v1/synthesize", json={
-        "text": "Piper test sentence.",
+        "text": probe_text,
         "engine": "piper"
     })
     assert syn_piper.status_code == 200
     assert syn_piper.headers["X-Engine"] == "piper"
+    assert "X-Engine-Load-Seconds" in syn_piper.headers
     assert len(syn_piper.content) > 1000
+    piper_voice = piper_engine.current_voice_id
+    assert piper_voice is not None
+    assert piper_engine.load_seconds > 0.0
 
     # If Kokoro installed, switch to Kokoro
     if kokoro_engine.is_installed():
+        # A stand-in session: this test pins the *residency policy*, not Kokoro inference. A real
+        # Kokoro pass runs at ~8.7x real time and would dominate the suite; test_compare_endpoint
+        # already covers the real end-to-end path. The stand-in is exactly what unload() drops.
+        stand_in = object()
+        monkeypatch.setattr(kokoro_engine, "_kokoro", stand_in)
+
         resp2 = client.post("/api/v1/engines/select", json={"engine": "kokoro"})
         assert resp2.status_code == 200
         assert engine_manager.active_engine_id == "kokoro"
-        
-        # Verify Piper was unloaded
-        assert piper_engine._loaded_voice is None
 
-        # Synthesize with Kokoro
-        syn_kokoro = client.post("/api/v1/synthesize", json={
-            "text": "Kokoro test sentence.",
-            "engine": "kokoro",
-            "voice_id": "af_heart"
-        })
-        assert syn_kokoro.status_code == 200
-        assert syn_kokoro.headers["X-Engine"] == "kokoro"
-        assert len(syn_kokoro.content) > 1000
+        # Engines stay isolated: switching must not disturb the idle engine's own voice state
+        assert piper_engine.current_voice_id == piper_voice
+
+        # Residency follows the policy. Warm (default) keeps the engine just left resident so
+        # switching back is a pointer flip; opt-out restores one-model-at-a-time.
+        if settings.keep_engines_warm:
+            assert piper_engine._loaded_voice is not None, "warm policy must keep the idle engine"
+            assert kokoro_engine._kokoro is stand_in, "the active engine must stay resident"
+            assert "piper" in engine_manager.resident_engines()
+            assert "kokoro" in engine_manager.resident_engines()
+        else:
+            assert piper_engine._loaded_voice is None
+            assert "piper" not in engine_manager.resident_engines()
 
         # Switch back to Piper
         client.post("/api/v1/engines/select", json={"engine": "piper"})
-        assert kokoro_engine._kokoro is None
         assert engine_manager.active_engine_id == "piper"
+        if settings.keep_engines_warm:
+            assert kokoro_engine._kokoro is stand_in, "warm policy must keep the idle engine"
+        else:
+            assert kokoro_engine._kokoro is None
+
 
 def test_health_check_never_loads_kokoro_model():
     """
@@ -126,15 +150,19 @@ def test_voice_listing_never_loads_kokoro_model():
     assert elapsed < 2.0, f"voice listing took {elapsed:.2f}s - model was loaded again"
 
 
-def test_engine_switch_does_not_block_on_busy_engine():
+def test_engine_switch_does_not_block_on_busy_engine(monkeypatch):
     """
     Regression: unload() used to block on the synthesis lock while holding the manager
     lock, so switching away from a busy Kokoro stalled for the whole remaining pass
     (and queued every Piper request behind it).
+
+    The deferred-release path is only reachable when the residency policy actually releases the
+    idle engine, so this pins the strict (LOCALVOICE_KEEP_WARM=0) policy.
     """
     if not kokoro_engine.is_installed():
         pytest.skip("Kokoro is not installed")
 
+    monkeypatch.setattr(settings, "keep_engines_warm", False)
     engine_manager.active_engine_id = "kokoro"
     holding = threading.Event()
     stop_holding = threading.Event()
@@ -164,6 +192,29 @@ def test_engine_switch_does_not_block_on_busy_engine():
     # Once the in-flight pass finishes, the deferred release must still free the model
     kokoro_engine.unload()
     assert kokoro_engine._unload_pending is False
+
+
+def test_engine_switch_keeps_idle_engine_under_warm_policy(monkeypatch):
+    """
+    The warm policy must make an engine switch a pointer flip: no unload of the engine being
+    left behind, so switching back does not reload a 5-11 s (Kokoro) or 8-24 s (Piper) model.
+    """
+    if not kokoro_engine.is_installed():
+        pytest.skip("Kokoro is not installed")
+
+    monkeypatch.setattr(settings, "keep_engines_warm", True)
+    monkeypatch.setattr(settings, "max_resident_rss_mb", 10_000)
+
+    engine_manager.active_engine_id = "kokoro"
+    kokoro_engine._unload_pending = False
+
+    started = time.time()
+    engine_manager.select_engine("piper")
+    elapsed = time.time() - started
+
+    assert elapsed < 1.0, f"engine switch took {elapsed:.2f}s - it blocked on model work"
+    assert engine_manager.active_engine_id == "piper"
+    assert kokoro_engine._unload_pending is False, "warm policy must not schedule an unload"
 
 
 def test_audio_cache_engine_separation():

@@ -60,6 +60,13 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
 
   if (!isOpen) return null;
 
+  // Which models the backend is holding in RAM. Two entries mean the warm policy is working and
+  // the next engine switch will not pay a load.
+  const residentModels = Object.entries(metrics?.resident_engines || {})
+    .filter(([, loaded]) => loaded)
+    .map(([engineId]) => engineId.toUpperCase())
+    .join(' + ');
+
   return (
     <div className="modal-overlay">
       <div className="modal-content" style={{ maxHeight: '90vh', overflowY: 'auto', width: '92%', maxWidth: '370px', padding: '12px' }}>
@@ -130,6 +137,9 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
               <div>Kokoro: <strong>{health?.kokoro_runtime || 'Available'} ({health?.kokoro_installed_voices || 54})</strong></div>
               <div style={{ gridColumn: 'span 2' }}>
                 Loaded Model: <strong>{health?.current_loaded_voice || 'None (Lazy load)'}</strong>
+              </div>
+              <div style={{ gridColumn: 'span 2' }}>
+                In Memory: <strong>{residentModels || 'None'}</strong>
               </div>
             </div>
           </div>

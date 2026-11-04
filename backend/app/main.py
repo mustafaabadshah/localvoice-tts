@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.utils.logging import logger
 from app.utils.security import is_allowed_origin
+from app.services.cancellation import SynthesisAbandoned
 from app.services.engine_manager import engine_manager
 
 from app.api.health import router as health_router
@@ -19,7 +20,10 @@ from app.api.metrics import router as metrics_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info(f"Initializing LocalVoice V2 Backend (Active Engine: {engine_manager.active_engine_id})...")
-    engine_manager.get_active_engine().initialize()
+    # Warm the engine the user actually reads with, not just the default. See
+    # docs/v2_9_engine_warmth.md - the controller idle-stops this process, so cold-start voice
+    # loading was a recurring cost, not a one-time one.
+    engine_manager.warm_startup_engine()
     yield
     logger.info("Shutting down LocalVoice Backend, releasing loaded models from memory...")
     for eng in engine_manager._engines.values():
@@ -51,8 +55,17 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Engine", "X-Cached", "X-Latency-Seconds", "Content-Length"]
+    expose_headers=["X-Engine", "X-Cached", "X-Latency-Seconds", "X-Engine-Load-Seconds", "Content-Length"]
 )
+
+# A request whose client hung up before it could start is not a server error. 499 is nginx's
+# "client closed request"; it is never delivered (the socket is gone) and exists only so logs and
+# metrics can tell an abandoned request apart from a failed one.
+@app.exception_handler(SynthesisAbandoned)
+async def abandoned_synthesis_handler(request: Request, exc: SynthesisAbandoned):
+    logger.info(f"Abandoned synthesis request on {request.url.path}: {exc}")
+    return JSONResponse(status_code=499, content={"detail": "Client abandoned the request"})
+
 
 # Include Routers with /api/v1 prefix
 app.include_router(health_router, prefix="/api/v1")

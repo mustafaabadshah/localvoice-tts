@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from app.config import settings
 from app.utils.logging import logger
@@ -12,6 +13,10 @@ class AudioCache:
         self.max_bytes = max_bytes or settings.max_cache_size_bytes
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        # Guards `_pending` only: the file lock above must never be held while waiting for a
+        # synthesis pass to finish.
+        self._pending_lock = threading.Lock()
+        self._pending: dict[str, threading.Event] = {}
         
         self.hits = 0
         self.misses = 0
@@ -19,6 +24,52 @@ class AudioCache:
     def compute_key(self, text: str, voice_id: str, speed: float, model_fingerprint: str = "", engine: str = "piper") -> str:
         payload = f"{engine}|{text}|{voice_id}|{speed:.2f}|{model_fingerprint}"
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def claim(self, key: str) -> bool:
+        """
+        Registers an in-flight computation for ``key``.
+
+        True means the caller owns the work and must call release() when done. False means
+        another request is already producing exactly this audio, so the caller should wait for
+        it instead of queueing a second inference behind the engine lock.
+        """
+        with self._pending_lock:
+            if key in self._pending:
+                return False
+            self._pending[key] = threading.Event()
+            return True
+
+    def release(self, key: str) -> None:
+        with self._pending_lock:
+            event = self._pending.pop(key, None)
+        if event is not None:
+            event.set()
+
+    def wait_for(self, key: str, timeout: float | None = None) -> bool:
+        """Blocks until the owner of ``key`` releases it. False when nobody owns it."""
+        with self._pending_lock:
+            event = self._pending.get(key)
+        if event is None:
+            return False
+        return event.wait(timeout)
+
+    @contextmanager
+    def single_flight(self, key: str, timeout: float | None = None):
+        """
+        Yields True to the request that should compute ``key``, False to the duplicates.
+
+        A duplicate waits for the owner instead of running the same text through the engine again:
+        two panels (or a reopened popup) asking for one paragraph used to serialise on the
+        engine lock and pay the full inference twice.
+        """
+        if self.claim(key):
+            try:
+                yield True
+            finally:
+                self.release(key)
+        else:
+            self.wait_for(key, timeout)
+            yield False
 
     def get_path(self, key: str) -> Path:
         return self.cache_dir / f"{key}.wav"

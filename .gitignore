@@ -6,6 +6,8 @@ __pycache__/
 .venv/
 backend/.venv/
 backend/cache/
+# Runtime state (last engine/voice) written by app/services/state_store.py
+backend/data/
 backend/server.pid
 .pytest_cache/
 .ruff_cache/

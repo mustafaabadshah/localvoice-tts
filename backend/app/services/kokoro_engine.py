@@ -10,6 +10,8 @@ import numpy as np
 from app.config import settings
 from app.services.base_engine import BaseTTSEngine
 from app.services.audio_cache import audio_cache
+from app.services.cancellation import SynthesisAbandoned, acquire_lock, is_cancelled
+from app.services.state_store import state_store
 from app.services.text_validator import validate_and_normalize_text
 from app.utils.logging import logger
 
@@ -44,6 +46,9 @@ class KokoroEngine(BaseTTSEngine):
         self._kokoro = None
         self._voice_ids_cache: list[str] | None = None
         self._unload_pending: bool = False
+        # How long the current ONNX session took to build. Kokoro pays 5-11 s per load on this
+        # class of hardware, so a reload must never be mistaken for inference time.
+        self.load_seconds: float = 0.0
         
         # Operational Metrics
         self.total_requests: int = 0
@@ -145,6 +150,8 @@ class KokoroEngine(BaseTTSEngine):
             "runtime": "onnxruntime",
             "sample_rate": 24000,
             "model_size_mb": round(self.model_path.stat().st_size / (1024 * 1024), 1) if self.model_path.exists() else 0,
+            "is_loaded": self._kokoro is not None,
+            "load_seconds": round(self.load_seconds, 2),
             "description": "High-fidelity 82M parameter neural TTS with expressive prosody."
         }
 
@@ -172,7 +179,8 @@ class KokoroEngine(BaseTTSEngine):
 
         sess = rt.InferenceSession(str(self.model_path), sess_options=opts, providers=["CPUExecutionProvider"])
         self._kokoro = Kokoro.from_session(sess, str(self.voices_path))
-        logger.info(f"Kokoro model loaded in {time.time() - t0:.2f}s")
+        self.load_seconds = time.time() - t0
+        logger.info(f"Kokoro model loaded in {self.load_seconds:.2f}s")
         return self._kokoro
 
     def initialize(self) -> bool:
@@ -184,7 +192,13 @@ class KokoroEngine(BaseTTSEngine):
         with self._lock:
             try:
                 self._get_kokoro()
-                self.current_voice_id = settings.default_kokoro_voice_id
+                # Kokoro's voices are style tables inside the already-loaded model, so warming
+                # the voice the user last read with costs nothing and starts the first
+                # paragraph in the right voice.
+                voice_id = state_store.last_voice(self.engine_id)
+                if not voice_id or voice_id not in self._voice_ids():
+                    voice_id = settings.default_kokoro_voice_id
+                self.current_voice_id = voice_id
                 logger.info(f"KokoroEngine initialized successfully with default voice: {self.current_voice_id}")
                 return True
             except Exception as e:
@@ -228,7 +242,8 @@ class KokoroEngine(BaseTTSEngine):
         text: str,
         voice_id: str | None = None,
         speed: float = 1.0,
-        speaker_id: int = 0
+        speaker_id: int = 0,
+        cancel: threading.Event | None = None
     ) -> tuple[bytes, bool, float]:
         """
         Synthesizes text into 24000 Hz 16-bit PCM WAV audio bytes.
@@ -248,62 +263,118 @@ class KokoroEngine(BaseTTSEngine):
         )
         cached_wav = audio_cache.get(cache_key)
         if cached_wav:
-            self.total_requests += 1
-            self.successful_requests += 1
-            return cached_wav, True, 0.001
+            return self._cached_result(cached_wav, target_voice_id)
 
-        # 2. Synthesize using Kokoro ONNX
+        # 2. One inference per distinct audio. A duplicate request (a second panel, a reopened
+        #    popup) waits for the first: at ~8.7x real time a second Kokoro pass is not a
+        #    free retry, it is half a minute of blocked engine.
+        with audio_cache.single_flight(cache_key, settings.lock_wait_seconds) as owner:
+            if not owner:
+                cached_wav = audio_cache.get(cache_key)
+                if cached_wav:
+                    return self._cached_result(cached_wav, target_voice_id)
+
+            return self._synthesize_uncached(clean_text, target_voice_id, effective_speed, cache_key, cancel)
+
+    def _cached_result(self, wav_bytes: bytes, voice_id: str) -> tuple[bytes, bool, float]:
+        self.total_requests += 1
+        self.successful_requests += 1
+        state_store.set_last_voice(self.engine_id, voice_id)
+        return wav_bytes, True, 0.001
+
+    def _synthesize_uncached(
+        self,
+        text: str,
+        voice_id: str,
+        speed: float,
+        cache_key: str,
+        cancel: threading.Event | None
+    ) -> tuple[bytes, bool, float]:
+        """Runs the ONNX inference. Holds the engine lock for exactly this pass."""
         start_time = time.time()
         self.total_requests += 1
 
-        with self._lock:
-            try:
-                kokoro_instance = self._get_kokoro()
-                valid_voices = kokoro_instance.get_voices()
+        # A language or voice change aborts the fetch on the client. An inference that has not
+        # started must not start, or the paragraph the user actually wants queues behind the one
+        # they gave up on - tens of seconds at Kokoro's pace.
+        if not acquire_lock(self._lock, cancel, settings.lock_wait_seconds):
+            self.failed_requests += 1
+            raise SynthesisAbandoned("Kokoro request abandoned before it could start")
 
-                # Fallback safely if voice_id is missing, invalid, or from another engine
-                if not target_voice_id or target_voice_id not in valid_voices:
-                    target_voice_id = settings.default_kokoro_voice_id
-                    if target_voice_id not in valid_voices and valid_voices:
-                        target_voice_id = valid_voices[0]
+        try:
+            if is_cancelled(cancel):
+                raise SynthesisAbandoned("Kokoro request abandoned before inference")
 
-                self.current_voice_id = target_voice_id
-                prefix = target_voice_id[:2]
-                lang_code = KOKORO_LANG_MAP.get(prefix, ("en_US", "English", "Female", "en-us"))[3]
+            kokoro_instance = self._get_kokoro()
+            valid_voices = kokoro_instance.get_voices()
 
-                samples, sample_rate = kokoro_instance.create(
-                    clean_text,
-                    voice=target_voice_id,
-                    speed=effective_speed,
-                    lang=lang_code
-                )
+            target_voice_id = voice_id
+            # Fallback safely if voice_id is missing, invalid, or from another engine
+            if not target_voice_id or target_voice_id not in valid_voices:
+                target_voice_id = settings.default_kokoro_voice_id
+                if target_voice_id not in valid_voices and valid_voices:
+                    target_voice_id = valid_voices[0]
 
-                # Convert float32 numpy samples to standard 16-bit PCM WAV
-                buffer = io.BytesIO()
-                sf.write(buffer, samples, sample_rate, format="WAV", subtype="PCM_16")
-                wav_bytes = buffer.getvalue()
-                latency = time.time() - start_time
+            self.current_voice_id = target_voice_id
+            prefix = target_voice_id[:2]
+            lang_code = KOKORO_LANG_MAP.get(prefix, ("en_US", "English", "Female", "en-us"))[3]
 
-                # Update operational metrics
-                self.successful_requests += 1
-                self.total_latency_seconds += latency
+            samples, sample_rate = kokoro_instance.create(
+                text,
+                voice=target_voice_id,
+                speed=speed,
+                lang=lang_code
+            )
 
-                # Save to disk cache
-                audio_cache.put(cache_key, wav_bytes)
+            # Convert float32 numpy samples to standard 16-bit PCM WAV
+            buffer = io.BytesIO()
+            sf.write(buffer, samples, sample_rate, format="WAV", subtype="PCM_16")
+            wav_bytes = buffer.getvalue()
+            latency = time.time() - start_time
 
-                return wav_bytes, False, latency
-            except Exception as e:
-                self.failed_requests += 1
-                logger.error(f"Kokoro synthesis failed: {e}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Kokoro speech synthesis failed: {str(e)}"
-                )
-            finally:
-                # Honour an unload() that was requested while this pass was running
-                if self._unload_pending:
-                    self._unload_pending = False
-                    self._release_model()
+            # Update operational metrics
+            self.successful_requests += 1
+            self.total_latency_seconds += latency
+            state_store.set_last_voice(self.engine_id, target_voice_id)
+
+            # Save to disk cache
+            audio_cache.put(cache_key, wav_bytes)
+
+            return wav_bytes, False, latency
+        except SynthesisAbandoned:
+            self.failed_requests += 1
+            logger.info("Kokoro synthesis abandoned: the client stopped waiting for it")
+            raise
+        except Exception as e:
+            self.failed_requests += 1
+            logger.error(f"Kokoro synthesis failed: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Kokoro speech synthesis failed: {str(e)}"
+            )
+        finally:
+            # Honour an unload() that was requested while this pass was running
+            if self._unload_pending:
+                self._unload_pending = False
+                self._release_model()
+            self._lock.release()
+
+    def get_metrics(self) -> dict:
+        avg_latency = (
+            (self.total_latency_seconds / self.successful_requests)
+            if self.successful_requests > 0 else 0.0
+        )
+        return {
+            "engine": self.engine_id,
+            "is_loaded": self._kokoro is not None,
+            "load_seconds": round(self.load_seconds, 2),
+            "total_requests": self.total_requests,
+            "successful_requests": self.successful_requests,
+            "failed_requests": self.failed_requests,
+            "average_latency_seconds": round(avg_latency, 3),
+            "current_voice": self.current_voice_id,
+            "cache_stats": audio_cache.get_stats(),
+        }
 
     def health_check(self) -> dict:
         installed = self.is_installed()

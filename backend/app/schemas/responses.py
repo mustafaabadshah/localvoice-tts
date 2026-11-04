@@ -13,6 +13,10 @@ class EngineInfoResponse(BaseModel):
     model_size_mb: float | None = None
     description: str | None = None
     is_active: bool = False
+    # True while this engine's weights are in RAM. With the warm residency policy both engines
+    # can be loaded at once, so "not active" no longer implies "not loaded".
+    is_loaded: bool = False
+    load_seconds: float | None = None
 
 class EngineListResponse(BaseModel):
     active_engine: str

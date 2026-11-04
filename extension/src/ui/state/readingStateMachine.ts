@@ -566,6 +566,10 @@ export class ReadingEngine {
       );
 
       if (!response.ok) {
+        // 499 is this backend saying it dropped work *this* client abandoned. The abort has
+        // already moved the machine on, so reporting an error here would paint an ERROR over a
+        // deliberate stop.
+        if (response.status === 499) return;
         const errorData = await response.json().catch(() => ({ detail: 'Synthesis failed' }));
         throw new Error(errorData.detail || `Server returned status ${response.status}`);
       }

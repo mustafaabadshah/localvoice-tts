@@ -97,6 +97,26 @@ export interface BackendMetrics {
     misses: number;
     hit_rate_pct: number;
   };
+  /** The engine the backend considers active (persisted across backend restarts). */
+  active_engine?: TTSEngineType;
+  /**
+   * Whether each engine currently holds weights in RAM. With the warm residency policy both can
+   * be loaded at once, so the second model shows up here without being active.
+   */
+  resident_engines?: Partial<Record<TTSEngineType, boolean>>;
+  engines?: Partial<Record<TTSEngineType, EngineMetrics>>;
+}
+
+export interface EngineMetrics {
+  engine: TTSEngineType;
+  total_requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  average_latency_seconds: number;
+  current_voice: string | null;
+  is_loaded: boolean;
+  /** Seconds the model took to load, or null while it has never loaded in this process. */
+  load_seconds: number | null;
 }
 
 export interface LocalVoiceSettings {

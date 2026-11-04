@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any
+import threading
 
 class BaseTTSEngine(ABC):
     engine_id: str
@@ -31,11 +32,17 @@ class BaseTTSEngine(ABC):
         text: str,
         voice_id: str | None = None,
         speed: float = 1.0,
-        speaker_id: int = 0
+        speaker_id: int = 0,
+        cancel: threading.Event | None = None
     ) -> tuple[bytes, bool, float]:
         """
         Synthesizes text into raw WAV bytes.
         Returns: (wav_bytes, was_cached, latency_seconds)
+
+        ``cancel`` is set by the API layer the moment the client hangs up. An inference that
+        has already started cannot be interrupted, but a request that has not started (or is
+        waiting for the engine lock) must not begin at all - that is what keeps an abandoned
+        paragraph from blocking the next one.
         """
         pass
 
@@ -50,6 +57,12 @@ class BaseTTSEngine(ABC):
         pass
 
     @abstractmethod
+    def get_metrics(self) -> dict:
+        """Returns per-engine operational counters (requests, latency, load time, residency)."""
+        pass
+
+    @abstractmethod
     def get_engine_info(self) -> dict:
         """Returns engine identification, model information, and installation status."""
         pass
+
